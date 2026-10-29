@@ -46,6 +46,7 @@ AGENTS.md          this file
 - Non-obvious choice → add `docs/decisions/NNN-title.md` (next free number, short: context, decision, consequence).
 - Component or data-flow change → update `docs/ARCHITECTURE.md` in the same commit.
 - End of each roadmap phase → append an entry to `CHANGELOG.md` and tick the phase in `docs/ROADMAP.md`.
+- **After each task:** append a short entry to `CHANGELOG.md` describing what Muse did in that task, and tick the phase in `docs/ROADMAP.md` if that task completes its "done when". Do this before reporting the task as done.
 
 ## Run and test
 

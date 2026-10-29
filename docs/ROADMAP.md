@@ -6,12 +6,15 @@
 
 - [ ] **29 Oct — Docs + WhatsApp setup.** Approve PRD v0.3, `AGENTS.md`, `docs/blast-rules.md`, `docs/ARCHITECTURE.md`, this roadmap; get WhatsApp Cloud API access (Meta app, test number, webhook HTTPS URL) and verify current template-message rules for replies inside/outside the 24-hour window.
   - *Done when:* all docs are approved and a test message round-trips on the WhatsApp test number.
+  - *Progress (29 Oct):* docs done — PRD rewritten to v0.3 and `ARCHITECTURE.md`, this roadmap, `AGENTS.md` and `docs/blast-rules.md` aligned to it. Remaining: WhatsApp API access, test-number round-trip, template-rule verification.
 
-- [ ] **30 Oct — Science core + eval harness.** Sequence/accession validation, E-utilities fetch, rules engine (intent + input type → program/database), hit classification and verification module (reciprocal best hit, coverage from coordinates, length, annotation) — all deterministic, traceable to `docs/blast-rules.md`. Eval harness on recorded fixtures for NP_000509 vs nematodes, NP_000198 vs *C. elegans*, RBP4 vs CG8.
+- [x] **30 Oct — Science core + eval harness.** Sequence/accession validation, E-utilities fetch, rules engine (intent + input type → program/database), hit classification and verification module (reciprocal best hit, coverage from coordinates, length, annotation) — all deterministic, traceable to `docs/blast-rules.md`. Eval harness on recorded fixtures for NP_000509 vs nematodes, NP_000198 vs *C. elegans*, RBP4 vs CG8.
   - *Done when:* the offline eval suite passes on program choice, false-positive rejection and true-hit confirmation (behaviour, not exact hit names).
+  - *Progress (29 Oct, ticked on done-when):* offline eval suite passes (15 tests: globin tblastn choice + true-hit confirmation, insulin blastp + borderline, RBP4 weak-hit rejection). Remaining for live use: E-utilities fetch behind the BLAST backend interface is not wired yet.
 
 - [ ] **31 Oct — Agent loop + WhatsApp chat + results page (Tier 1 end to end).** Agent loop with configurable budget, step log with reasons, logged deviations, next-candidate and adjusted-retry recovery; WhatsApp as main interface (sequence/accession starts a job, one running job per chat with cancel offer, milestone progress, grounded follow-ups from stored results only); results page with hits, classifications, evidence, step log and exact parameters — no submission form, unguessable links, no phone numbers. Web submit form from the boilerplate is removed or retired in this phase.
   - *Done when:* the beta globin workflow runs end to end on WhatsApp — submit, milestone updates, reciprocal confirmation, summary with results link — and one follow-up question is answered quoting stored E-value/identity/coverage.
+  - *Progress (29 Oct):* done offline — agent loop with budget/step log/recovery, WhatsApp chat routing (start, one-per-chat + cancel, grounded follow-ups, forget-history), form-free results pages with step log. Remaining: live NCBI submission and live WhatsApp/Modal sends, then the on-WhatsApp end-to-end run this phase is judged on.
 
 ## Tier 2 — Muse showcase (in order; only after Tier 1 above is ticked)
 
