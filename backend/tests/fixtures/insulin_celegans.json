@@ -1,0 +1,44 @@
+{
+  "case": "insulin NP_000198 vs C. elegans (parameter sensitivity)",
+  "accession": "NP_000198",
+  "question": "Is there an insulin homolog in C. elegans?",
+  "sequences": {
+    "NP_000198": {
+      "accession": "NP_000198",
+      "organism": "Homo sapiens",
+      "annotation": "insulin",
+      "sequence": "MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN"
+    }
+  },
+  "primary_hits": [
+    {
+      "accession": "CE_INSULIN_LIKE",
+      "organism": "Caenorhabditis elegans",
+      "annotation": "insulin-like peptide",
+      "identity": 38.0,
+      "query_start": 25,
+      "query_end": 108,
+      "alignment_length": 84,
+      "subject_length": 118,
+      "bit_score": 55.0,
+      "evalue": 0.00008,
+      "sequence": "FVNQHLCGSHLVEALYLVC"
+    }
+  ],
+  "reciprocal_hits": {
+    "CE_INSULIN_LIKE": [
+      {
+        "accession": "NP_000198",
+        "organism": "Homo sapiens",
+        "annotation": "insulin",
+        "identity": 38.0,
+        "query_start": 1,
+        "query_end": 90,
+        "alignment_length": 90,
+        "subject_length": 110,
+        "bit_score": 52.0,
+        "evalue": 0.0002
+      }
+    ]
+  }
+}

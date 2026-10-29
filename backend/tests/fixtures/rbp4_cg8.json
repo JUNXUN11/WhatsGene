@@ -1,0 +1,57 @@
+{
+  "case": "RBP4 vs CG8 false positives (weak hits must be rejected)",
+  "accession": "NP_000371",
+  "question": "Identify this protein",
+  "sequences": {
+    "NP_000371": {
+      "accession": "NP_000371",
+      "organism": "Homo sapiens",
+      "annotation": "retinol binding protein 4 lipocalin",
+      "sequence": "MKWVWALLLLAALGSGRAERDCRVSSFRVKENFDKARFSGTWYAMAKKDPEGLFLQDNIVAEFSVDETGQMSATAKGRVRLLNNWDVCADMVGTFTDTEDPAKFKMKYWGVASFLQKGNDDHWIVDTDYDTYAVQYSCRLLNLDGTCADSYSFVFSRDPNGLPPEAQKIVRQRQEELCLARQYRLIVHNGYCDGRSERNLL"
+    }
+  },
+  "primary_hits": [
+    {
+      "accession": "CG8_WEAK",
+      "organism": "Drosophila melanogaster",
+      "annotation": "uncharacterized protein",
+      "identity": 24.0,
+      "query_start": 20,
+      "query_end": 80,
+      "alignment_length": 61,
+      "subject_length": 520,
+      "bit_score": 38.0,
+      "evalue": 0.8,
+      "sequence": "ERDCRVSSFRVKENFDKAR"
+    },
+    {
+      "accession": "CG8_BORDERLINE",
+      "organism": "Drosophila melanogaster",
+      "annotation": "uncharacterized protein",
+      "identity": 30.0,
+      "query_start": 1,
+      "query_end": 120,
+      "alignment_length": 120,
+      "subject_length": 540,
+      "bit_score": 60.0,
+      "evalue": 0.00005,
+      "sequence": "ERDCRVSSFRVKENFDKAR"
+    }
+  ],
+  "reciprocal_hits": {
+    "CG8_BORDERLINE": [
+      {
+        "accession": "SOME_OTHER_PROTEIN",
+        "organism": "Drosophila melanogaster",
+        "annotation": "uncharacterized protein",
+        "identity": 25.0,
+        "query_start": 1,
+        "query_end": 50,
+        "alignment_length": 50,
+        "subject_length": 300,
+        "bit_score": 35.0,
+        "evalue": 0.5
+      }
+    ]
+  }
+}
