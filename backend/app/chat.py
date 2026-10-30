@@ -1,9 +1,11 @@
-"""WhatsApp chat handling (PRD §4.4, main interface).
+"""WhatsApp chat handling (main interface).
 
-A message containing a sequence or accession starts a new job; other
-messages are follow-up questions about stored results (default: latest
-job). One running job per chat: a new sequence during a run gets a
-"job running" reply offering cancel — it never replaces the run.
+A message containing a sequence or accession starts a new workflow;
+other messages are follow-up questions about stored results (default:
+latest job, or the job named as WG-... in the message). Many workflows
+may run at once for the same chat — a new sequence never waits for or
+replaces a running one. When a workflow finishes, the worker WhatsApps
+the result in this thread.
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import re
 
 from . import agent, db
 from .agent_loop import process_job
-from .blast_backend import BlastBackend
+from .search_backend import SearchBackend
 from .validate import looks_like_accession
 
 _SEQ_LINE = re.compile(r"^[A-Za-z\-*\s]+$")
@@ -50,7 +52,7 @@ def extract_sequence_and_question(text: str) -> tuple[str | None, str]:
     return None, raw
 
 
-def handle_message(*, whatsapp_user_id: str, text: str, backend: BlastBackend) -> dict:
+def handle_message(*, whatsapp_user_id: str, text: str, backend: SearchBackend) -> dict:
     """Handle one inbound message. Returns {action, reply, job_id}."""
     body = (text or "").strip()
     low = body.lower()
@@ -71,24 +73,41 @@ def handle_message(*, whatsapp_user_id: str, text: str, backend: BlastBackend) -
     sequence_text, question = extract_sequence_and_question(body)
 
     if sequence_text is not None:
-        running = db.running_job_for_user(whatsapp_user_id)
-        if running:
-            return {"action": "job_running", "job_id": running["id"],
-                    "reply": (f"A job is already running in this chat ({running['id']}, status {running['status']}). "
-                              "Reply 'cancel' to stop it, then send the new sequence.")}
         job = db.create_job(question=question, raw_input=sequence_text,
-                            whatsapp_user_id=whatsapp_user_id)
-        final = process_job(job, backend)
-        if final.get("status") == "failed":
-            reply = f"Job {final['id']} could not run: {final.get('error')}"
-        else:
-            reply = (f"Job {final['id']} done ({final.get('outcome')}). {final.get('summary', '')} "
-                     f"Full results: /jobs/{final['id']}")
-        return {"action": "job", "job_id": final["id"], "reply": reply}
+                            whatsapp_user_id=whatsapp_user_id, source="whatsapp")
+        if backend.name == "fixture":
+            # Recorded-data runs finish instantly; tests and demos see the
+            # result in this same reply. Live backends run in the background.
+            final = process_job(job, backend)
+            if final.get("status") == "failed":
+                reply = f"Job {final['id']} could not run: {final.get('error')}"
+            else:
+                reply = (f"Job {final['id']} done ({final.get('outcome')}). {final.get('summary', '')} "
+                         f"Full results: /jobs/{final['id']}")
+            return {"action": "job", "job_id": final["id"], "reply": reply}
+        from . import worker
 
-    # Follow-up question: grounded in stored results only.
-    latest = db.latest_job_for_user(whatsapp_user_id)
-    answer = agent.answer_followup(job=latest, question=body)
+        worker.submit_async(job, backend)
+        running = len([j for j in db.list_jobs_for_user(whatsapp_user_id)
+                       if j["status"] in ("queued", "running")])
+        return {"action": "job_queued", "job_id": job["id"],
+                "reply": (f"Job {job['id']} is queued and running in the background "
+                          f"({running} workflow(s) active in this chat). You can send another "
+                          "sequence now — I will WhatsApp you here as each one finishes.")}
+
+    # Follow-up question: grounded in stored results only. A WG-... ID in
+    # the message selects that workflow; otherwise the latest one is used.
+    match = re.search(r"(WG-[A-Z0-9\-]+)", body, re.IGNORECASE)
+    target = db.get_job(match.group(1).upper()) if match else None
+    latest = target or db.latest_job_for_user(whatsapp_user_id)
+    if latest and "status" in low:
+        return {"action": "followup", "job_id": latest["id"],
+                "reply": (f"Job {latest['id']} is {latest.get('status')}"
+                          f" (outcome: {latest.get('outcome') or 'pending'}). "
+                          f"Full results: /jobs/{latest['id']}")}
+    answer = agent.answer_followup(
+        job=latest, question=body,
+        searches=db.get_searches(latest["id"]) if latest else None)
     if answer == "__FORGET_HISTORY__":
         count = db.delete_user_history(whatsapp_user_id)
         return {"action": "forgot_history", "job_id": None,

@@ -19,3 +19,7 @@ frontend/.env
 .idea/
 .vscode/*
 !.vscode/extensions.json
+/docs/
+/reference/
+CHANGELOG.md
+/AGENTS.md

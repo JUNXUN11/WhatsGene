@@ -1,19 +1,22 @@
-"""Agent loop (PRD §4.1): plan -> run step -> observe -> next step.
+"""Agent loop: plan -> run step -> observe -> next step.
 
-Every decision is persisted to the step log with its reason. The loop
-counts every BLAST submission against the per-job budget (config) and,
-on exhaustion, stops and reports what was and was not found. Recovery
-is defined behaviour: next candidate on failed verification, one
-adjusted-settings retry on too-few hits — never improvised retries.
+One job is one workflow. In auto mode the workflow is the rules engine's
+single best search; in all mode it fans out to every BLAST program that
+accepts the query type. Every search (primary, reciprocal, retry) is
+stored with its exact parameters and hits, counts against the per-job
+budget, and is logged with its reason. On budget exhaustion the loop
+stops and reports what was and was not found.
 """
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from . import agent, config, db, rules_engine
-from .blast_backend import BlastBackend, BlastNotWired
+from .blast_params import parameters_for
+from .search_backend import SearchBackend, SearchError
 from .classify import classify_hits
 from .validate import ValidationError, detect_type, looks_like_accession, normalise_sequence
 from .verify import coverage_from_coordinates, verify_candidate
@@ -37,9 +40,9 @@ def _with_coverage(hits: list[dict], query_length: int) -> list[dict]:
     return out
 
 
-def process_job(job: dict, backend: BlastBackend,
+def process_job(job: dict, backend: SearchBackend,
                 on_milestone: Milestone | None = None) -> dict:
-    """Run one job through the loop. Returns the final job row."""
+    """Run one workflow through the loop. Returns the final job row."""
     job_id = job["id"]
     started = time.monotonic()
     deadline = datetime.now(timezone.utc) + timedelta(seconds=config.MAX_JOB_SECONDS)
@@ -51,10 +54,14 @@ def process_job(job: dict, backend: BlastBackend,
             try:
                 on_milestone(db.get_job(job_id) or job, message)
             except Exception:
-                pass  # notification failure never fails the job (ARCHITECTURE)
+                pass  # notification failure never fails the job
 
     def budget_left() -> bool:
         return searches_used < config.MAX_SEARCHES_PER_JOB and (time.monotonic() - started) < config.MAX_JOB_SECONDS
+
+    def cancelled() -> bool:
+        fresh = db.get_job(job_id)
+        return bool(fresh and fresh.get("status") == "cancelled")
 
     raw = (job.get("raw_input") or "").strip()
     question = job.get("question", "")
@@ -63,26 +70,27 @@ def process_job(job: dict, backend: BlastBackend,
     sequence = ""
     accession: str | None = None
     query_annotation = ""
+    query_organism: str | None = None
     if looks_like_accession(raw):
         accession = raw.upper()
         try:
             record = backend.fetch_by_accession(accession)
-        except BlastNotWired as exc:
+        except SearchError as exc:
             _log(job_id, step="fetch_accession", observation=f"Accession {accession}",
                  decision="fail job", reason=str(exc))
             return db.update_job(job_id, status="failed", input_kind="accession",
                                  accession=accession, error=str(exc)) or job
         sequence = (record.get("sequence") or "").upper()
         query_annotation = record.get("annotation", "") or record.get("organism", "")
+        query_organism = (record.get("organism") or "").strip() or None
+        organism_match = re.search(r"\[([^\]]+)\]\s*$", query_annotation)
+        if organism_match:
+            query_organism = organism_match.group(1)
         _log(job_id, step="fetch_accession", observation=f"{accession} -> {len(sequence)} residues",
-             decision="use fetched sequence", reason="Accession resolved via BLAST backend (E-utilities).")
+             decision="use fetched sequence", reason=f"Accession resolved via {backend.name} backend.")
     else:
-        raw_sequence = raw
-        # WhatsApp messages may carry "SEQUENCE <question>" in one text; the
-        # stored raw_input is sequence-only by the time the loop runs, except
-        # dev API calls which pass sequence and question separately.
         try:
-            sequence, _header = normalise_sequence(raw_sequence)
+            sequence, _header = normalise_sequence(raw)
         except ValidationError as exc:
             _log(job_id, step="validate", observation="Sequence input", decision="fail job", reason=str(exc))
             return db.update_job(job_id, status="failed", error=str(exc)) or job
@@ -98,14 +106,31 @@ def process_job(job: dict, backend: BlastBackend,
     _log(job_id, step="validate", observation=f"{detected} sequence, {len(sequence)} residues",
          decision="accept input", reason="Alphabet and length checks passed (blast-rules §2).")
 
-    # --- intent -> rules engine (-> logged deviation hook) ---
+    # --- intent -> workflow plan (rules engine; model supplies intent only) ---
     intent = agent.get_intent(question)
-    choice = rules_engine.choose_search(intent=intent, detected_type=detected)
+    mode = (job.get("workflow_mode") or "auto").lower()
+    try:
+        plan = rules_engine.plan_programs(
+            intent=intent, detected_type=detected, mode=mode,
+            requested_program=job.get("requested_program"))
+    except ValueError as exc:
+        _log(job_id, step="choose_search", observation=f"mode={mode}",
+             decision="fail job", reason=str(exc))
+        return db.update_job(job_id, status="failed", sequence=sequence,
+                             query_length=len(sequence), detected_type=detected,
+                             intent=intent, error=str(exc)) or job
+    choice = plan[0]
     _log(job_id, step="choose_search",
          observation=f"intent goal={intent.get('goal')}, target={intent.get('target_organism')}, detected={detected}",
          decision=f"{choice['program']} / {choice['database']}",
          reason=f"{choice['reason']} [{choice['rule']}]")
-    deviation = agent.propose_deviation(intent=intent, detected_type=detected, rules_choice=choice)
+    if len(plan) > 1:
+        _log(job_id, step="plan_workflow",
+             observation=f"mode={mode}: " + ", ".join(f"{p['program']}/{p['database']}" for p in plan),
+             decision=f"run {len(plan)} searches in one workflow",
+             reason="Fan-out requested; every program that accepts this query type runs "
+                    "and stores its own parameters and hits for comparison.")
+    deviation = agent.propose_deviation(intent=intent, detected_type=detected, rules_choice=choice) if mode == "auto" else None
     applied_deviation = False
     if deviation:
         applied = bool(config.DEVIATION_AUTO_APPLY)
@@ -116,130 +141,207 @@ def process_job(job: dict, backend: BlastBackend,
         if applied:
             choice = {**choice, "program": deviation["program"], "database": deviation["database"],
                       "reason": choice["reason"] + f" Deviation applied: {deviation.get('reason', '')}"}
+            plan[0] = choice
             applied_deviation = True
 
-    parameters: dict = {
-        "evalue_threshold": 0.01,
-        "word_size": 3 if detected == "protein" else 11,
-        "matrix": "BLOSUM62" if detected == "protein" else None,
-        "rationale": choice["reason"],
-        "rule": choice["rule"],
-        "deviation_applied": applied_deviation,
-    }
+    def params_for_spec(spec: dict, kind: str) -> dict:
+        base = parameters_for(program=spec["program"], detected_type=detected,
+                              query_length=len(sequence),
+                              organism_filter=spec.get("organism_filter"))
+        return {"backend": backend.name, **base, "kind": kind,
+                "rationale": spec["reason"], "rule": spec["rule"],
+                "deviation_applied": applied_deviation}
+
+    primary_params = params_for_spec(choice, "primary")
+    if primary_params.get("short_query_adjusted"):
+        _log(job_id, step="short_query",
+             observation=f"{choice['program']} query length {len(sequence)}",
+             decision=f"E-value cutoff {primary_params['evalue_threshold']:g}, word size "
+                      f"{primary_params['word_size']}, matrix {primary_params['matrix']}",
+             reason=primary_params.get("short_query_reason", "Short-query adjustment applied."))
     db.update_job(job_id, sequence=sequence, query_length=len(sequence), detected_type=detected,
                   input_kind="accession" if accession else f"fasta_{detected}",
                   accession=accession, intent=intent, program=choice["program"],
                   database=choice["database"], organism_filter=choice.get("organism_filter"),
-                  parameters=parameters)
+                  parameters=primary_params)
     notify(f"Job {job_id} started: {choice['program']} against {choice['database']}.")
 
-    # --- search / classify / verify loop ---
-    hits: list[dict] = []
+    # --- search / classify / verify across the planned programs ---
+    primary_hits: list[dict] = []
+    workflow_searches: list[dict] = []
     verification: dict | None = None
     outcome: str | None = None
-    retried = False
+    confirmed = False
+    successful_searches = 0
+    last_error: str | None = None
 
-    while True:
+    def run_search(spec: dict, params: dict, kind: str) -> list[dict] | None:
+        """Submit one search; store params+hits; return classified hits."""
+        nonlocal searches_used, successful_searches, last_error
         if not budget_left():
             _log(job_id, step="budget", observation=f"searches_used={searches_used}",
                  decision="stop searching", reason="Run budget exhausted (max searches or max time).")
-            outcome = outcome or "incomplete_budget"
-            break
-        kind = "retry" if retried else "primary"
+            return None
         try:
-            rid = backend.submit(sequence=sequence, program=choice["program"],
-                                 database=choice["database"],
-                                 parameters={**parameters, "kind": kind})
-        except BlastNotWired as exc:
-            _log(job_id, step="submit", observation=f"{choice['program']} / {choice['database']}",
-                 decision="fail job", reason=str(exc))
-            summary = f"Search could not be submitted. {exc}"
-            return db.update_job(job_id, status="failed", searches_used=searches_used,
-                                 summary=summary, error=str(exc)) or job
+            rid = backend.submit(sequence=sequence, program=spec["program"],
+                                 database=spec["database"], parameters=params)
+        except SearchError as exc:
+            search_id = db.create_search(job_id, kind=kind, program=spec["program"],
+                                         database=spec["database"], parameters=params, rid=None)
+            db.complete_search(search_id, hits=[], status="failed", error=str(exc))
+            _log(job_id, step="submit", observation=f"{spec['program']} / {spec['database']}",
+                 decision="skip this program, continue workflow", reason=str(exc))
+            last_error = str(exc)
+            return None
         searches_used += 1
-        db.create_search(job_id, kind=kind, program=choice["program"],
-                         database=choice["database"], parameters=parameters, rid=rid)
+        search_id = db.create_search(job_id, kind=kind, program=spec["program"],
+                                     database=spec["database"], parameters=params, rid=rid)
         db.update_job(job_id, searches_used=searches_used)
-        _log(job_id, step="submit", observation=f"RID {rid} ({kind})",
-             decision="poll for results", reason="BLAST job submitted via backend interface.")
+        _log(job_id, step="submit", observation=f"RID {rid} ({kind}, {spec['program']})",
+             decision="poll for results", reason=f"BLAST job submitted via {backend.name} backend.")
         try:
             status = backend.poll(rid)
             if status != "ready":
+                db.complete_search(search_id, hits=[], status="failed",
+                                   error=f"BLAST job did not complete (status {status}).")
                 _log(job_id, step="poll", observation=f"RID {rid} status={status}",
                      decision="fail search", reason="BLAST job did not complete.")
-                outcome = "incomplete_budget"
-                break
+                return None
             raw_hits = backend.fetch_results(rid)
-        except BlastNotWired as exc:
-            _log(job_id, step="poll", observation=f"RID {rid}", decision="fail job", reason=str(exc))
-            return db.update_job(job_id, status="failed", searches_used=searches_used, error=str(exc)) or job
-
+        except SearchError as exc:
+            db.complete_search(search_id, hits=[], status="failed", error=str(exc))
+            _log(job_id, step="poll", observation=f"RID {rid}", decision="fail search", reason=str(exc))
+            last_error = str(exc)
+            return None
         hits = classify_hits(_with_coverage(raw_hits, len(sequence)))
+        db.complete_search(search_id, hits=hits, status="done")
+        successful_searches += 1
         counts: dict[str, int] = {}
         for hit in hits:
             counts[hit["classification"]] = counts.get(hit["classification"], 0) + 1
-        _log(job_id, step="classify", observation=f"{len(hits)} hits: {counts}",
+        _log(job_id, step="classify", observation=f"{spec['program']}: {len(hits)} hits: {counts}",
              decision="verify candidates in rank order",
              reason="Classification in deterministic code (blast-rules §7 thresholds).")
-        notify(f"Job {job_id}: {len(hits)} hits classified.")
+        notify(f"Job {job_id}: {spec['program']} returned {len(hits)} hits classified.")
+        workflow_searches.append({"program": spec["program"], "database": spec["database"],
+                                  "parameters": params, "hits": hits})
+        return hits
 
-        candidates = [h for h in hits if h["classification"] in ("strong", "borderline")]
-        confirmed = False
-        for candidate in candidates:
+    def verify_hits(spec: dict, base_params: dict, hits: list[dict]) -> dict | None:
+        """Reciprocal verification for one program's candidates."""
+        nonlocal searches_used
+        result: dict | None = None
+        for candidate in [h for h in hits if h["classification"] in ("strong", "borderline")]:
             if not budget_left():
                 _log(job_id, step="budget", observation=f"searches_used={searches_used}",
                      decision="stop verification", reason="Run budget exhausted during verification.")
                 break
+            recip_params = {**base_params, "kind": "reciprocal",
+                            "candidate_accession": candidate.get("accession", ""),
+                            "organism_filter": query_organism}
             try:
                 recip_rid = backend.submit(
-                    sequence=str(candidate.get("sequence", sequence)), program=choice["program"],
-                    database=choice["database"],
-                    parameters={**parameters, "kind": "reciprocal",
-                                "candidate_accession": candidate.get("accession", "")})
-            except BlastNotWired as exc:
+                    sequence=str(candidate.get("sequence", sequence)), program=spec["program"],
+                    database=spec["database"], parameters=recip_params)
+            except SearchError as exc:
                 _log(job_id, step="reciprocal", observation=candidate.get("accession", "?"),
-                     decision="fail job", reason=str(exc))
-                return db.update_job(job_id, status="failed", searches_used=searches_used,
-                                     hits=hits, error=str(exc)) or job
+                     decision="try next candidate", reason=str(exc))
+                continue
             searches_used += 1
-            db.create_search(job_id, kind="reciprocal", program=choice["program"],
-                             database=choice["database"], parameters=parameters, rid=recip_rid)
+            recip_id = db.create_search(job_id, kind="reciprocal", program=spec["program"],
+                                        database=spec["database"], parameters=recip_params, rid=recip_rid)
             db.update_job(job_id, searches_used=searches_used)
+            if backend.poll(recip_rid) != "ready":
+                db.complete_search(recip_id, hits=[], status="failed",
+                                   error="Reciprocal search did not complete.")
+                _log(job_id, step="reciprocal",
+                     observation=f"Candidate {candidate.get('accession', '?')} RID {recip_rid}",
+                     decision="try next candidate",
+                     reason="Reciprocal search did not complete; verification cannot confirm this candidate.")
+                continue
             reciprocal_hits = classify_hits(_with_coverage(backend.fetch_results(recip_rid), len(sequence)))
-            verification = verify_candidate(
+            db.complete_search(recip_id, hits=reciprocal_hits, status="done")
+            result = verify_candidate(
                 candidate=candidate, reciprocal_hits=reciprocal_hits,
                 query_accession=accession, query_length=len(sequence),
                 query_annotation=query_annotation)
             _log(job_id, step="verify",
                  observation=f"Candidate {candidate.get('accession', '?')} ({candidate['classification']}, E={candidate.get('evalue')})",
-                 decision=("confirmed" if verification["confirmed"] else "not confirmed — try next candidate"),
-                 reason="; ".join(verification["reasons"]))
-            if verification["confirmed"]:
-                outcome = "confirmed"
-                confirmed = True
+                 decision=("confirmed" if result["confirmed"] else "not confirmed — try next candidate"),
+                 reason="; ".join(result["reasons"]))
+            if result["confirmed"]:
                 break
-        if confirmed:
-            break
-        if verification is not None:
-            outcome = "not_confirmed"
+        return result
 
-        if outcome is None:
-            outcome = "not_confirmed"
-        # Too-few recovery: exactly one adjusted-settings retry, logged.
-        significant = counts.get("strong", 0) + counts.get("borderline", 0)
-        if significant == 0 and not retried and budget_left():
-            retried = True
-            parameters = {**parameters, "evalue_threshold": 0.1, "adjusted_retry": True}
-            db.update_job(job_id, parameters=parameters)
+    for index, spec in enumerate(plan):
+        if cancelled():
+            return db.get_job(job_id) or job
+        params = params_for_spec(spec, "primary" if index == 0 else "primary")
+        hits = run_search(spec, params, "primary")
+        if hits is None:
+            continue
+        if index == 0:
+            primary_hits = hits
+        if not confirmed:
+            found = verify_hits(spec, params, hits)
+            if found is not None:
+                verification = found
+                if found["confirmed"]:
+                    confirmed = True
+                    outcome = "confirmed"
+
+    if successful_searches == 0:
+        summary = f"Search could not be submitted. {last_error or 'No search completed.'}"
+        _log(job_id, step="submit", observation="all planned programs",
+             decision="fail job", reason=summary)
+        return db.update_job(job_id, status="failed", searches_used=searches_used,
+                             summary=summary, error=last_error or summary) or job
+
+    # Too-few recovery: exactly one adjusted retry of the primary search.
+    significant = sum(1 for s in workflow_searches for h in s["hits"]
+                      if h["classification"] in ("strong", "borderline"))
+    if outcome is None:
+        outcome = "confirmed" if confirmed else "not_confirmed"
+    if significant == 0 and budget_left() and not cancelled():
+        if primary_params.get("short_query_adjusted"):
+            _log(job_id, step="retry", observation="No strong/borderline hits",
+                 decision="no E-value retry",
+                 reason="Short-query profile already uses the raised E-value cutoff "
+                        "(Lab 04 Q1); loosening it again would only add noise.")
+        else:
+            retry_params = {**primary_params, "evalue_threshold": 0.1, "adjusted_retry": True, "kind": "retry"}
+            db.update_job(job_id, parameters=retry_params)
             _log(job_id, step="retry", observation="No strong/borderline hits",
                  decision="retry with adjusted settings",
                  reason="Too-few-hits playbook (blast-rules §6): loosened E-value threshold to 0.1.")
-            continue
-        break
+            retry_hits = run_search(choice, retry_params, "retry")
+            if retry_hits is not None:
+                primary_hits = retry_hits
+                if not confirmed:
+                    found = verify_hits(choice, retry_params, retry_hits)
+                    if found is not None:
+                        verification = found
+                        outcome = "confirmed" if found["confirmed"] else "not_confirmed"
 
-    summary = agent.summarise(job=db.get_job(job_id) or job, hits=hits,
-                              outcome=outcome, verification=verification)
-    final = db.update_job(job_id, status="done", outcome=outcome, hits=hits,
+    if not budget_left() and outcome == "not_confirmed" and significant == 0 and successful_searches:
+        # Budget ran out before any confirmation could be established.
+        fresh_counts = sum(1 for s in workflow_searches for h in s["hits"]
+                           if h["classification"] in ("strong", "borderline"))
+        if fresh_counts == 0 and searches_used >= config.MAX_SEARCHES_PER_JOB:
+            outcome = "incomplete_budget"
+
+    if cancelled():
+        return db.get_job(job_id) or job
+    final_params = {**primary_params,
+                    "workflow": {"mode": mode, "searches": [
+                        {"program": s["program"], "database": s["database"],
+                         "parameters": s["parameters"], "hit_count": len(s["hits"])}
+                        for s in workflow_searches]}}
+    db.update_job(job_id, parameters=final_params)
+    summary = agent.summarise(job=db.get_job(job_id) or job, hits=primary_hits,
+                              outcome=outcome, verification=verification,
+                              workflow_searches=workflow_searches)
+    final = db.update_job(job_id, status="done", outcome=outcome, hits=primary_hits,
                           summary=summary, searches_used=searches_used)
     _log(job_id, step="summarise", observation=f"outcome={outcome}",
          decision="report to user", reason="Summary generated from parsed facts only.")

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import config, db  # noqa: E402
 from app.agent_loop import process_job  # noqa: E402
-from app.blast_backend import FixtureBackend  # noqa: E402
+from app.search_backend import Fixture  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -35,11 +35,9 @@ class EvalCase(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def run_case(self, fixture_name: str) -> tuple[dict, dict, FixtureBackend]:
+    def run_case(self, fixture_name: str) -> tuple[dict, dict, Fixture]:
         case = load_case(fixture_name)
-        backend = FixtureBackend(sequences=case["sequences"],
-                                 primary_hits=case["primary_hits"],
-                                 reciprocal_hits=case["reciprocal_hits"])
+        backend = Fixture(fixture_name)
         job = db.create_job(question=case["question"], raw_input=case["accession"],
                             whatsapp_user_id="eval")
         final = process_job(job, backend)
