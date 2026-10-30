@@ -1,45 +1,132 @@
+<script setup lang="ts">
+const { createJob } = useApi()
+const router = useRouter()
+
+const sequence = ref('')
+const question = ref('')
+const mode = ref<'auto' | 'single' | 'all'>('auto')
+const program = ref('blastp')
+const whatsapp = ref('')
+const busy = ref(false)
+const error = ref('')
+
+const samples = [
+  { label: 'Beta globin in nematodes', sequence: 'NP_000509', question: 'Is there a related gene in nematodes, and how confident can I be?' },
+  { label: 'Lab 04 short query (12 aa)', sequence: 'PNLHGLFGRKTG', question: 'What E-value cutoff, word size and matrix were used, and how do they compare to the defaults?' },
+  { label: 'Insulin in C. elegans', sequence: 'NP_000198', question: 'Is there an insulin homolog in C. elegans?' },
+]
+
+function useSample(s: (typeof samples)[number]) {
+  sequence.value = s.sequence
+  question.value = s.question
+  error.value = ''
+}
+
+async function submit() {
+  error.value = ''
+  if (!sequence.value.trim()) {
+    error.value = 'Paste a sequence, FASTA, or an accession first.'
+    return
+  }
+  busy.value = true
+  try {
+    const job = await createJob(sequence.value.trim(), question.value.trim(), {
+      workflow_mode: mode.value,
+      program: mode.value === 'single' ? program.value : null,
+      whatsapp_number: whatsapp.value.trim() || null,
+    })
+    await router.push(`/jobs/${job.id}`)
+  } catch (e: unknown) {
+    const err = e as { data?: { detail?: string }; message?: string }
+    error.value = err.data?.detail || err.message || 'Could not queue this workflow. Is the backend running on port 8000?'
+  } finally {
+    busy.value = false
+  }
+}
+</script>
+
 <template>
   <main class="page">
     <h1>BLAST for people who don't use BLAST every day</h1>
     <p class="lede">
-      Ask once on WhatsApp. WhatsGene runs the whole search itself — it picks the BLAST
-      program with fixed rules, submits and polls NCBI in the background, classifies and
-      reciprocal-checks the hits in code, and replies with a verified answer and a link
-      to the full results here.
+      Paste a short query here. WhatsGene turns it into a background workflow: the rules
+      engine picks the BLAST program (or runs every program that fits your query), stores
+      every result with its exact E-value cutoff, word size and matrix, and WhatsApps you
+      when it is done. Ask questions about the stored results here or on WhatsApp — answers
+      quote stored values only.
     </p>
 
-    <div class="card">
-      <h2 style="margin-top: 0;">Start on WhatsApp</h2>
-      <ol style="margin: 0; padding-left: 20px;">
-        <li>Message the WhatsGene WhatsApp number with a sequence or accession and your question — for example: <em>NP_000509 — is there a related gene in nematodes?</em></li>
-        <li>Keep working. You will get brief progress messages at major milestones, not a page to refresh.</li>
-        <li>When it finishes, WhatsApp sends the verified summary and a link to your results page.</li>
-        <li>Ask follow-ups in the same chat — answers quote the stored E-value, identity and coverage from your job.</li>
-      </ol>
-      <p class="hint">This website has no submission form by design: jobs start in WhatsApp chat, and these pages only show results.</p>
-    </div>
+    <form class="card" @submit.prevent="submit">
+      <label for="seq">Sequence, FASTA, or accession</label>
+      <textarea id="seq" v-model="sequence" placeholder="NP_000509 — or paste FASTA / a raw sequence such as PNLHGLFGRKTG" />
+      <div class="sample-row">
+        <button v-for="s in samples" :key="s.label" type="button" @click="useSample(s)">{{ s.label }}</button>
+      </div>
+
+      <label for="q">Your question</label>
+      <input id="q" v-model="question" type="text" placeholder="Is there a related gene in nematodes?">
+
+      <label for="mode">Workflow</label>
+      <select id="mode" v-model="mode" class="select">
+        <option value="auto">Auto — rules engine picks the best program</option>
+        <option value="all">Run all — every program that accepts this query type</option>
+        <option value="single">Single — I choose the program</option>
+      </select>
+      <div v-if="mode === 'single'" style="margin-top: 10px;">
+        <label for="prog">Program</label>
+        <select id="prog" v-model="program" class="select">
+          <option value="blastn">blastn (DNA → DNA)</option>
+          <option value="blastp">blastp (protein → protein)</option>
+          <option value="blastx">blastx (DNA → protein)</option>
+          <option value="tblastn">tblastn (protein → DNA)</option>
+          <option value="tblastx">tblastx (DNA → DNA, translated)</option>
+        </select>
+        <p class="hint">Incompatible program/query pairs are rejected with the applicable list — nothing is submitted.</p>
+      </div>
+      <p v-if="mode === 'all'" class="hint">Protein queries run blastp + tblastn; DNA queries run blastn + blastx + tblastx. Each stores its own parameters and hits for comparison.</p>
+
+      <label for="wa">WhatsApp number for the done notification (optional)</label>
+      <input id="wa" v-model="whatsapp" type="text" placeholder="e.g. 60123456789 — leave blank to just watch this page">
+      <p class="hint">Stored server-side only, never shown on results pages. You can also start and ask questions entirely on WhatsApp.</p>
+
+      <button class="btn" type="submit" :disabled="busy">{{ busy ? 'Queueing…' : 'Queue workflow' }}</button>
+      <p v-if="error" class="error">{{ error }}</p>
+    </form>
 
     <div class="notice">
-      Your sequence is sent to NCBI's public BLAST service. Job history is stored so
-      follow-up questions can be answered; message “forget my history” on WhatsApp at any
-      time to delete it.
+      Short protein queries (30 aa or fewer, e.g. the 12-aa Lab 04 query PNLHGLFGRKTG) use the
+      short-query profile automatically: E-value cutoff 200,000, word size 2, matrix PAM30 —
+      versus the BLASTP defaults E=10, word size 3, BLOSUM62. The exact settings are stored on
+      every search and shown on the results page.
     </div>
 
-    <h2>How verification works</h2>
+    <h2>How it runs</h2>
     <p>
-      The model interprets your question; code computes and classifies. Hits are labelled
-      strong, borderline, or not significant by fixed thresholds, the top candidate must
-      pass a reciprocal search plus coverage, length and annotation checks, and every
-      agent decision is logged with its reason on the results page — with the exact
-      program, database and parameters, so you can reproduce the search at NCBI.
+      Submissions queue instantly and run in the background — queue several in a row and keep
+      working. Code validates and classifies; the model only interprets your question and words
+      the summary. Hits are labelled strong, borderline, or not significant by fixed thresholds,
+      the top candidate must pass reciprocal, coverage, length and annotation checks, and every
+      decision is logged with its reason.
     </p>
 
-    <h2>Example</h2>
+    <h2>Start on WhatsApp instead</h2>
     <p>
-      “I have human beta globin (NP_000509). Is there a related gene in nematodes, and how
-      confident can I be?” WhatsGene searches the protein against nematode EST sequences,
-      verifies the best candidate reciprocally, and tells you how confident you can be —
-      with the evidence, not just a hit list.
+      Message the WhatsGene WhatsApp number with a sequence or accession and your question.
+      Many workflows can run at once in one chat; each finish is WhatsApped back with a link.
+      Follow-ups such as “What was the E-value cutoff for WG-…?” are answered from stored results.
     </p>
   </main>
 </template>
+
+<style scoped>
+.select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 15px;
+  background: #fff;
+  color: var(--ink);
+}
+</style>

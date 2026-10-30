@@ -2,19 +2,20 @@
 import type { Job } from '~/types/job'
 
 const route = useRoute()
-const { getJob } = useApi()
+const { getJob, cancelJob, askJob } = useApi()
 
 const job = ref<Job | null>(null)
 const error = ref('')
+const askText = ref('')
+const answer = ref('')
+const asking = ref(false)
 let timer: ReturnType<typeof setInterval> | undefined
 
 async function load() {
   try {
     job.value = await getJob(String(route.params.id))
     error.value = ''
-    if (job.value && (job.value.status === 'queued' || job.value.status === 'running')) {
-      // keep polling while NCBI runs
-    } else if (timer) {
+    if (job.value && job.value.status !== 'queued' && job.value.status !== 'running' && timer) {
       clearInterval(timer)
     }
   } catch (e: unknown) {
@@ -37,22 +38,56 @@ function fmt(n: unknown): string {
   if (typeof n === 'number' && Math.abs(n) > 0 && Math.abs(n) < 0.001) return n.toExponential(1)
   return String(n)
 }
+
+function fmtBool(v: unknown): string {
+  return v === true ? 'yes' : 'no'
+}
+
+async function cancel() {
+  if (!job.value) return
+  await cancelJob(job.value.id)
+  await load()
+}
+
+async function ask() {
+  if (!job.value || !askText.value.trim()) return
+  asking.value = true
+  answer.value = ''
+  try {
+    answer.value = await askJob(job.value.id, askText.value.trim())
+  } catch (e: unknown) {
+    const err = e as { message?: string }
+    answer.value = err.message || 'Could not ask right now.'
+  } finally {
+    asking.value = false
+  }
+}
+
+const suggestions = [
+  'What is the E-value cutoff?',
+  'What is the word size?',
+  'What is the scoring matrix? How does it compare to the defaults?',
+  'Compare the programs — which found the best hit?',
+  'How confident can I be in the top hit?',
+]
 </script>
 
 <template>
   <main class="page">
-    <p><NuxtLink to="/jobs">← All jobs</NuxtLink></p>
+    <p><NuxtLink to="/jobs">← All workflows</NuxtLink></p>
 
     <p v-if="error" class="error">{{ error }}</p>
-    <p v-else-if="!job">Loading job…</p>
+    <p v-else-if="!job">Loading workflow…</p>
 
     <template v-else>
       <h1>Job {{ job.id }}</h1>
       <p>
         <span class="status-pill" :class="`status-${job.status}`">{{ job.status }}</span>
-        <span v-if="job.status === 'queued' || job.status === 'running'" style="margin-left: 10px; font-size: 14px; color: var(--muted);">
-          NCBI is running — you can close this page. WhatsApp will notify you when it is done.
+        <span style="margin-left: 10px; font-size: 14px; color: var(--muted);">
+          {{ job.workflow_mode || 'auto' }} workflow · started from {{ job.source || 'web' }}
+          <template v-if="job.status === 'queued' || job.status === 'running'"> · running in the background — you can close this page<template v-if="job.notify_configured">; WhatsApp will notify you</template>.</template>
         </span>
+        <button v-if="job.status === 'queued' || job.status === 'running'" class="btn btn-secondary" style="margin: 0 0 0 12px; padding: 6px 14px; font-size: 13px;" @click="cancel">Cancel</button>
       </p>
 
       <p v-if="job.question" style="font-size: 17px;">“{{ job.question }}”</p>
@@ -63,21 +98,52 @@ function fmt(n: unknown): string {
         <dl class="meta">
           <dt>Program</dt><dd>{{ job.program || '—' }}</dd>
           <dt>Database</dt><dd>{{ job.database || '—' }}</dd>
-          <dt>Detected type</dt><dd>{{ job.detected_type || '—' }}</dd>
+          <dt>Detected type</dt><dd>{{ job.detected_type || '—' }}<span v-if="job.query_length"> · {{ job.query_length }} residues</span></dd>
           <dt>Accession</dt><dd>{{ job.accession || '—' }}</dd>
           <dt>Organism filter</dt><dd>{{ job.organism_filter || 'none' }}</dd>
-          <dt>WhatsApp</dt><dd>{{ job.whatsapp_status || 'not_sent' }}</dd>
+          <dt>WhatsApp notify</dt><dd>{{ job.whatsapp_status || 'not_sent' }}<span v-if="job.notify_configured"> (number stored server-side)</span></dd>
+          <dt>Outcome</dt><dd>{{ job.outcome || '—' }} · searches used {{ job.searches_used ?? '—' }}</dd>
         </dl>
         <p v-if="job.parameters?.rationale" style="font-size: 14px; margin-bottom: 0;">
           <strong>Why this search:</strong> {{ job.parameters.rationale }}
         </p>
       </div>
 
-      <template v-if="job.hits && job.hits.length">
-        <h2>Hits</h2>
+      <template v-if="job.searches && job.searches.length">
+        <h2>Searches in this workflow</h2>
+        <p style="font-size: 14px; color: var(--muted);">Every BLAST run stores its exact parameters and hits, so programs can be compared value for value.</p>
         <table class="hits">
           <thead>
-            <tr><th>Accession</th><th>Organism</th><th>Identity</th><th>Coverage</th><th>E-value</th><th>Class</th></tr>
+            <tr><th>Program</th><th>Database</th><th>Kind</th><th>E cutoff</th><th>Word</th><th>Matrix</th><th>Short-adj.</th><th>Hits</th><th>Top E-value</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="s in job.searches" :key="s.id">
+              <td>{{ s.program || '—' }}</td>
+              <td>{{ s.database || '—' }}</td>
+              <td>{{ s.kind }}</td>
+              <td>{{ fmt(s.parameters?.evalue_threshold) }}</td>
+              <td>{{ fmt(s.parameters?.word_size) }}</td>
+              <td>{{ fmt(s.parameters?.matrix) }}</td>
+              <td>{{ fmtBool(s.parameters?.short_query_adjusted) }}</td>
+              <td>{{ s.hits?.length ?? 0 }}</td>
+              <td>{{ fmt(s.hits?.[0]?.evalue) }}</td>
+              <td>{{ s.status }}<span v-if="s.error" class="error"> — {{ s.error }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <template v-for="s in job.searches" :key="`note-${s.id}`">
+          <p v-if="s.parameters?.short_query_reason" style="font-size: 14px;">
+            <strong>{{ s.program }}:</strong> {{ s.parameters.short_query_reason }}
+            <span v-if="s.parameters?.ncbi_defaults"> NCBI defaults: E={{ fmt((s.parameters.ncbi_defaults as Record<string, unknown>).evalue_threshold) }}, word={{ fmt((s.parameters.ncbi_defaults as Record<string, unknown>).word_size) }}, matrix={{ fmt((s.parameters.ncbi_defaults as Record<string, unknown>).matrix) }}.</span>
+          </p>
+        </template>
+      </template>
+
+      <template v-if="job.hits && job.hits.length">
+        <h2>Hits (primary search)</h2>
+        <table class="hits">
+          <thead>
+            <tr><th>Accession</th><th>Organism</th><th>Identity</th><th>Coverage</th><th>Bit score</th><th>E-value</th><th>Class</th></tr>
           </thead>
           <tbody>
             <tr v-for="hit in job.hits" :key="hit.accession">
@@ -85,18 +151,30 @@ function fmt(n: unknown): string {
               <td>{{ hit.organism || '—' }}</td>
               <td>{{ fmt(hit.identity) }}<span v-if="hit.identity !== undefined">%</span></td>
               <td>{{ fmt(hit.query_coverage) }}<span v-if="hit.query_coverage !== undefined">%</span></td>
+              <td>{{ fmt(hit.bit_score) }}</td>
               <td>{{ fmt(hit.evalue) }}</td>
               <td :class="`class-${hit.classification}`">{{ hit.classification || '—' }}</td>
             </tr>
           </tbody>
         </table>
       </template>
-      <p v-else-if="job.status === 'done'">No hits parsed for this job.</p>
+      <p v-else-if="job.status === 'done'">No hits parsed for this workflow.</p>
 
       <template v-if="job.summary">
         <h2>Summary</h2>
         <div class="card" style="background: #fff;">{{ job.summary }}</div>
       </template>
+
+      <h2>Ask about this workflow</h2>
+      <p style="font-size: 14px; color: var(--muted);">Answers quote stored E-values, parameters and hits only. If the stored results cannot answer, it will say so. The same questions work on WhatsApp — include the job ID, e.g. “What was the E-value cutoff for {{ job.id }}?”</p>
+      <div class="sample-row" style="margin-bottom: 10px;">
+        <button v-for="s in suggestions" :key="s" type="button" @click="askText = s">{{ s }}</button>
+      </div>
+      <form @submit.prevent="ask">
+        <textarea v-model="askText" style="min-height: 72px;" placeholder="What word size was used?" />
+        <button class="btn" type="submit" :disabled="asking">{{ asking ? 'Asking…' : 'Ask' }}</button>
+      </form>
+      <div v-if="answer" class="card" style="background: #fff;">{{ answer }}</div>
 
       <template v-if="job.step_log && job.step_log.length">
         <h2>Agent step log</h2>
@@ -118,8 +196,7 @@ function fmt(n: unknown): string {
       </template>
 
       <div class="notice">
-        Results page is the source of truth. Program, database, and parameters above let you
-        reproduce this search at NCBI. Your sequence was sent to NCBI's public BLAST service.
+        {{ job.data_notice || 'Results page is the source of truth. Program, database, and parameters above let you reproduce this search.' }}
       </div>
     </template>
   </main>

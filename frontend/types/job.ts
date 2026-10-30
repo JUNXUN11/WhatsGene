@@ -15,12 +15,26 @@ export type Classification = 'strong' | 'borderline' | 'not_significant'
 export interface Hit {
   accession: string
   organism?: string
+  annotation?: string
   identity?: number
   query_coverage?: number
   alignment_length?: number
+  subject_length?: number
   bit_score?: number
   evalue?: number
   classification?: Classification
+}
+
+export interface SearchResult {
+  id: number
+  kind: string
+  program?: string | null
+  database?: string | null
+  parameters?: Record<string, unknown>
+  rid?: string | null
+  status: string
+  hits?: Hit[]
+  error?: string | null
 }
 
 export interface Job {
@@ -28,8 +42,12 @@ export interface Job {
   status: JobStatus
   question: string
   input_kind: string
+  source?: string
+  workflow_mode?: string
+  requested_program?: string | null
   accession?: string | null
   detected_type?: string
+  query_length?: number
   program?: string | null
   database?: string | null
   organism_filter?: string | null
@@ -37,11 +55,14 @@ export interface Job {
   summary?: string | null
   error?: string | null
   hits?: Hit[]
+  searches?: SearchResult[]
   outcome?: string | null
   intent?: Record<string, unknown>
   searches_used?: number
   step_log?: StepLogEntry[]
   whatsapp_status?: string
+  notified_at?: string | null
+  notify_configured?: boolean
   results_url?: string
   data_notice?: string
   created_at?: string
