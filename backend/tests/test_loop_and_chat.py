@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import chat, config, db  # noqa: E402
 from app.agent_loop import process_job  # noqa: E402
-from app.blast_backend import FixtureBackend  # noqa: E402
+from app.search_backend import Fixture  # noqa: E402
 from app.intent import parse_intent  # noqa: E402
 from app.rules_engine import choose_search  # noqa: E402
 from app.verify import coverage_from_coordinates, verify_candidate  # noqa: E402
@@ -52,7 +52,7 @@ class TestVerify(Base):
 
 class TestBudget(Base):
     def test_budget_exhaustion_reports_incomplete(self):
-        backend = FixtureBackend(primary_hits=[], reciprocal_hits={})
+        backend = Fixture(primary_hits=[], reciprocal_hits={})
         job = db.create_job(question="Is there a related gene in nematodes?",
                             raw_input=">q\nMVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQ", whatsapp_user_id="u1")
         old = config.MAX_SEARCHES_PER_JOB
@@ -66,14 +66,67 @@ class TestBudget(Base):
         self.assertLessEqual(final["searches_used"], 2)  # primary (+reciprocal none) within cap logic
 
 
+class TestReciprocal(Base):
+    SEQ = "MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQ"
+
+    def _backend(self, cls: type[Fixture] = Fixture) -> Fixture:
+        case_hits = [{
+            "accession": "HIT1", "organism": "C. elegans", "annotation": "hemoglobin family protein",
+            "identity": 60.0, "query_start": 1, "query_end": 40, "alignment_length": 40,
+            "subject_length": 45, "bit_score": 100.0, "evalue": 1e-12, "sequence": "MVHLTP",
+        }]
+        return cls(
+            sequences={"NP_000509": {"accession": "NP_000509.1", "organism": "",
+                                     "annotation": "hemoglobin subunit beta [Homo sapiens]",
+                                     "sequence": self.SEQ}},
+            primary_hits=case_hits,
+            reciprocal_hits={"HIT1": [{"accession": "NP_000509", "evalue": 1e-10,
+                                       "annotation": "hemoglobin subunit beta [Homo sapiens]",
+                                       "query_start": 1, "query_end": 40, "subject_length": 44}]},
+        )
+
+    def _run(self, backend: Fixture) -> dict:
+        job = db.create_job(question="Is there a related gene in nematodes?",
+                            raw_input="NP_000509", whatsapp_user_id="u1")
+        return process_job(job, backend)
+
+    def test_reciprocal_targets_query_organism(self):
+        backend = self._backend()
+        final = self._run(backend)
+        self.assertEqual(final["outcome"], "confirmed")
+        kinds = {s["parameters"].get("kind", "primary"): s for s in backend.submissions}
+        self.assertEqual(kinds["primary"]["parameters"]["organism_filter"], "nematodes")
+        self.assertEqual(kinds["reciprocal"]["parameters"]["organism_filter"], "Homo sapiens")
+
+    def test_fetch_step_names_resolving_backend(self):
+        backend = self._backend()
+        final = self._run(backend)
+        fetch = next(s for s in db.get_step_log(final["id"]) if s["step"] == "fetch_accession")
+        self.assertIn(backend.name, fetch["reason"])
+
+    def test_incomplete_reciprocal_tries_next_candidate(self):
+        class RecipFailBackend(Fixture):
+            def poll(self, rid: str) -> str:
+                sub = next((s for s in self.submissions if s["rid"] == rid), None)
+                if sub and sub["parameters"].get("kind") == "reciprocal":
+                    return "failed"
+                return "ready"
+
+        final = self._run(self._backend(RecipFailBackend))
+        self.assertEqual(final["status"], "done")
+        self.assertEqual(final["outcome"], "not_confirmed")
+        decisions = [s["decision"] for s in db.get_step_log(final["id"])]
+        self.assertIn("try next candidate", decisions)
+
+
 class TestChat(Base):
-    def _backend(self) -> FixtureBackend:
+    def _backend(self) -> Fixture:
         case_hits = [{
             "accession": "HIT1", "organism": "C. elegans", "annotation": "globin",
             "identity": 60.0, "query_start": 1, "query_end": 40, "alignment_length": 40,
             "subject_length": 45, "bit_score": 100.0, "evalue": 1e-12, "sequence": "MVHLTP",
         }]
-        return FixtureBackend(
+        return Fixture(
             sequences={"NP_000509": {"accession": "NP_000509", "organism": "human",
                                      "annotation": "globin",
                                      "sequence": "MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQ"}},

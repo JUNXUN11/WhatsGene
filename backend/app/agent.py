@@ -33,16 +33,11 @@ def propose_deviation(*, intent: dict, detected_type: str, rules_choice: dict) -
 
 
 def summarise(*, job: dict, hits: list[dict], outcome: str | None,
-              verification: dict | None = None) -> str:
+              verification: dict | None = None,
+              workflow_searches: list[dict] | None = None) -> str:
     """Plain-language summary from parsed facts only (template fallback)."""
     program = job.get("program", "?")
     database = job.get("database", "?")
-    if not hits:
-        return (
-            f"No hits were parsed for this job ({program} against {database}). "
-            f"Outcome: {outcome or 'not confirmed'}. Every setting tried is in the step log."
-        )
-    top = hits[0]
     verdict = ""
     if verification:
         verdict = (
@@ -50,6 +45,24 @@ def summarise(*, job: dict, hits: list[dict], outcome: str | None,
             if verification.get("confirmed")
             else f" Verification did not confirm the top candidate ({verification.get('failing_check')})."
         )
+    if workflow_searches and len(workflow_searches) > 1:
+        parts = []
+        for search in workflow_searches:
+            shits = search.get("hits") or []
+            if shits:
+                t = shits[0]
+                parts.append(f"{search.get('program')}: top hit {t.get('accession', '?')} "
+                             f"E-value {t.get('evalue', '?')}, {t.get('classification', '?')}")
+            else:
+                parts.append(f"{search.get('program')}: no hits")
+        return (f"Workflow ran {len(workflow_searches)} programs. " + "; ".join(parts) +
+                f". Outcome: {outcome or 'not confirmed'}.{verdict}")
+    if not hits:
+        return (
+            f"No hits were parsed for this job ({program} against {database}). "
+            f"Outcome: {outcome or 'not confirmed'}. Every setting tried is in the step log."
+        )
+    top = hits[0]
     return (
         f"Top hit: {top.get('accession', '?')} ({top.get('organism', 'unknown organism')}), "
         f"E-value {top.get('evalue', '?')}, identity {top.get('identity', '?')}%, "
@@ -58,44 +71,9 @@ def summarise(*, job: dict, hits: list[dict], outcome: str | None,
     )
 
 
-def answer_followup(*, job: dict | None, question: str) -> str:
-    """Grounded follow-up: stored results + rules only (blast-rules §12).
+def answer_followup(*, job: dict | None, question: str,
+                    searches: list[dict] | None = None) -> str:
+    """Grounded follow-up: stored results + rules only (blast-rules §12)."""
+    from .qa import answer_question
 
-    Quotes actual values; says so when stored results cannot answer.
-    """
-    if not job:
-        return "You have no jobs yet. Send a sequence or an accession (e.g. NP_000509) with your question to start one."
-    hits: list[dict] = job.get("hits") or []
-    q = (question or "").lower()
-    if "forget" in q and "history" in q:
-        return "__FORGET_HISTORY__"
-    if not hits:
-        return (
-            f"Job {job['id']} has no stored hits (status {job.get('status')}), so I can't answer that from stored results. "
-            "Send a new sequence or accession to run a search."
-        )
-    top = hits[0]
-    if any(k in q for k in ("e-value", "evalue", "significant", "confidence", "confident")):
-        return (
-            f"For job {job['id']}, the top hit {top.get('accession', '?')} has E-value {top.get('evalue', '?')}, "
-            f"identity {top.get('identity', '?')}%, coverage {top.get('query_coverage', '?')}%, "
-            f"classified as {top.get('classification', '?')} (program {job.get('program', '?')} against {job.get('database', '?')}). "
-            f"Outcome: {job.get('outcome') or 'see results page'}."
-        )
-    if any(k in q for k in ("top hit", "best hit", "what did", "result", "found")):
-        return (
-            f"Top hit for job {job['id']}: {top.get('accession', '?')} ({top.get('organism', 'unknown organism')}), "
-            f"E-value {top.get('evalue', '?')}, identity {top.get('identity', '?')}%, coverage {top.get('query_coverage', '?')}%, "
-            f"classified as {top.get('classification', '?')}."
-        )
-    if any(k in q for k in ("program", "database", "why", "parameter", "settings")):
-        params = job.get("parameters") or {}
-        return (
-            f"Job {job['id']} used {job.get('program', '?')} against {job.get('database', '?')}. "
-            f"Reason recorded: {params.get('rationale', 'see step log on the results page')}"
-        )
-    return (
-        "I can't answer that from the stored results for your latest job. "
-        f"I can quote its stored values — top hit {top.get('accession', '?')}, E-value {top.get('evalue', '?')}, "
-        f"identity {top.get('identity', '?')}%, coverage {top.get('query_coverage', '?')}% — or run a new search if you send a sequence."
-    )
+    return answer_question(job=job, searches=searches, question=question)

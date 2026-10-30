@@ -1,7 +1,9 @@
-"""WhatsGene FastAPI app — WhatsApp webhook, results API, health.
+"""WhatsGene FastAPI app — web submission, WhatsApp webhook, results API.
 
-Main interface is WhatsApp chat (PRD §4.4); the web API serves results
-pages only. POST /jobs remains as a dev/test entry point.
+A submission from the website or WhatsApp only creates a queued workflow;
+the background worker runs many workflows at once and WhatsApps the
+result when each finishes. The web app can also ask grounded questions
+about a stored workflow.
 
 Run:
     uvicorn app.main:app --reload --port 8000
@@ -9,24 +11,32 @@ Docs: http://localhost:8000/docs
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import chat, config, db
-from .agent_loop import process_job
-from .blast_backend import NCBIWebBackend
+from . import agent, chat, config, db, whatsapp_client, worker
+from .search_backend import SearchError, get_backend
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init_db()
+
+    async def _drain() -> None:
+        while True:
+            await asyncio.to_thread(worker.drain_once)
+            await asyncio.sleep(2)
+
+    task = asyncio.create_task(_drain())
     yield
+    task.cancel()
 
 
-app = FastAPI(title="WhatsGene", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="WhatsGene", version="0.3.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +49,14 @@ app.add_middleware(
 class JobCreate(BaseModel):
     sequence: str = Field(description="FASTA text, raw sequence, or NCBI accession (e.g. NP_000509)")
     question: str = Field(default="", description="Plain-language question, e.g. 'Is there a related gene in nematodes?'")
+    workflow_mode: str = Field(default="auto", description="auto | single | all")
+    program: str | None = Field(default=None, description="Program for workflow_mode=single, e.g. blastp")
+    whatsapp_number: str | None = Field(default=None, description="Optional WhatsApp number for the done notification")
+    source: str = Field(default="web")
+
+
+class AskBody(BaseModel):
+    question: str
 
 
 @app.get("/health")
@@ -48,13 +66,30 @@ def health() -> dict:
 
 @app.post("/jobs", status_code=201)
 def create_job(body: JobCreate) -> dict:
-    """Dev/test entry. The product entry point is the WhatsApp webhook."""
+    """Queue a workflow and return at once; the worker runs it."""
     raw = (body.sequence or "").strip()
     if not raw:
         raise HTTPException(status_code=422, detail="sequence is empty. Paste a FASTA sequence or an accession.")
-    job = db.create_job(question=body.question or "", raw_input=raw)
-    final = process_job(job, NCBIWebBackend())
-    return _public_job(final)
+    mode = (body.workflow_mode or "auto").lower()
+    if mode not in ("auto", "single", "all"):
+        raise HTTPException(status_code=422, detail="workflow_mode must be auto, single, or all.")
+    notify = (body.whatsapp_number or "").strip() or None
+    job = db.create_job(question=body.question or "", raw_input=raw,
+                        whatsapp_user_id=notify, source=body.source or "web",
+                        workflow_mode=mode, requested_program=body.program,
+                        notify_to=notify)
+    try:
+        backend = get_backend()
+    except SearchError as exc:
+        # Queue anyway only if a worker could succeed later; surface config
+        # errors now so the user is not left waiting on a dead workflow.
+        db.update_job(job["id"], status="failed", error=str(exc), summary=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if backend.name == "fixture":
+        final = worker.run_job(job, backend)  # recorded data finishes instantly
+        return _public_job(final)
+    worker.submit_async(job, backend)
+    return _public_job(db.get_job(job["id"]) or job)
 
 
 @app.get("/jobs")
@@ -70,19 +105,53 @@ def get_job(job_id: str) -> dict:
     return _public_job(job)
 
 
+@app.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    if job["status"] in ("done", "failed", "cancelled"):
+        return _public_job(job)
+    return _public_job(db.update_job(job_id, status="cancelled") or job)
+
+
+@app.post("/jobs/{job_id}/ask")
+def ask_job(job_id: str, body: AskBody) -> dict:
+    """Grounded Q&A over this workflow's stored results (web Ask box)."""
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    answer = agent.answer_followup(job=job, question=body.question,
+                                   searches=db.get_searches(job_id))
+    if answer == "__FORGET_HISTORY__":
+        return {"job_id": job_id, "answer": "Ask on WhatsApp to delete chat history, or use a job you own there."}
+    return {"job_id": job_id, "answer": answer}
+
+
 def _public_job(job: dict) -> dict:
-    """Strip server-side keys; attach step log and results metadata."""
-    public = {k: v for k, v in job.items() if k != "whatsapp_user_id"}
+    """Strip server-side keys; attach searches, step log, metadata."""
+    public = {k: v for k, v in job.items() if k not in ("whatsapp_user_id", "notify_to")}
     public["step_log"] = db.get_step_log(job["id"])
+    public["searches"] = db.get_searches(job["id"])
+    public["notify_configured"] = bool(job.get("notify_to") or job.get("whatsapp_user_id"))
     public["results_url"] = f"{config.FRONTEND_BASE_URL}/jobs/{job['id']}"
-    public["data_notice"] = (
-        "Your sequence is sent to NCBI's public BLAST service. Job history is stored "
-        "server-side; ask WhatsGene to 'forget my history' to delete it."
-    )
+    backend_name = (job.get("parameters") or {}).get("backend", "ncbi")
+    history = "Job history is stored server-side; ask WhatsGene to 'forget my history' to delete it."
+    if backend_name == "local":
+        public["data_notice"] = (
+            "Your sequence was searched against a database on this server; "
+            f"nothing was sent to NCBI. {history}"
+        )
+    elif backend_name == "fixture":
+        public["data_notice"] = f"Demo results from recorded data; no live search ran. {history}"
+    else:
+        public["data_notice"] = (
+            f"Your sequence was sent to NCBI's public BLAST service. {history}"
+        )
     return public
 
 
-# --- WhatsApp webhook (main interface, PRD §4.4) ---
+# --- WhatsApp webhook ---
 
 @app.get("/webhooks/whatsapp")
 def whatsapp_verify(request: Request) -> object:
@@ -105,9 +174,12 @@ async def whatsapp_inbound(request: Request) -> dict:
                 if not sender or not body:
                     continue
                 result = chat.handle_message(
-                    whatsapp_user_id=sender, text=body, backend=NCBIWebBackend())
+                    whatsapp_user_id=sender, text=body, backend=get_backend())
                 replies.append(result)
-                # Real send goes through the WhatsApp Cloud API client
-                # (stub until credentials are configured); the handler's
-                # reply is recorded regardless so nothing fails silently.
+                sent = whatsapp_client.send_text(to=sender, body=result.get("reply", ""))
+                if result.get("job_id"):
+                    job = db.get_job(result["job_id"])
+                    if job and job.get("status") in ("done", "failed"):
+                        db.update_job(job["id"],
+                                      whatsapp_status="sent" if sent.get("status") == "sent" else "failed")
     return {"status": "received", "replies": replies}

@@ -47,7 +47,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT,
     whatsapp_status TEXT NOT NULL DEFAULT 'not_sent',
     notified_at TEXT,
-    hits TEXT NOT NULL DEFAULT '[]'
+    hits TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT 'whatsapp',
+    workflow_mode TEXT NOT NULL DEFAULT 'auto',
+    requested_program TEXT,
+    notify_to TEXT
 );
 CREATE TABLE IF NOT EXISTS searches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +63,9 @@ CREATE TABLE IF NOT EXISTS searches (
     rid TEXT,
     status TEXT NOT NULL DEFAULT 'submitted',
     submitted_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    hits TEXT NOT NULL DEFAULT '[]',
+    error TEXT
 );
 CREATE TABLE IF NOT EXISTS step_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +88,14 @@ _JOB_COLUMNS: dict[str, str] = {
     "outcome": "TEXT",
     "searches_used": "INTEGER NOT NULL DEFAULT 0",
     "deadline_at": "TEXT",
+    "source": "TEXT NOT NULL DEFAULT 'whatsapp'",
+    "workflow_mode": "TEXT NOT NULL DEFAULT 'auto'",
+    "requested_program": "TEXT",
+    "notify_to": "TEXT",
+}
+_SEARCH_COLUMNS: dict[str, str] = {
+    "hits": "TEXT NOT NULL DEFAULT '[]'",
+    "error": "TEXT",
 }
 
 
@@ -105,6 +119,10 @@ def init_db() -> None:
         for col, ddl in _JOB_COLUMNS.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
+        search_cols = {r[1] for r in conn.execute("PRAGMA table_info(searches)").fetchall()}
+        for col, ddl in _SEARCH_COLUMNS.items():
+            if col not in search_cols:
+                conn.execute(f"ALTER TABLE searches ADD COLUMN {col} {ddl}")
 
 
 def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
@@ -118,17 +136,21 @@ def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def create_job(*, question: str, raw_input: str, input_kind: str = "",
-               whatsapp_user_id: str | None = None) -> dict[str, Any]:
+               whatsapp_user_id: str | None = None, source: str = "whatsapp",
+               workflow_mode: str = "auto", requested_program: str | None = None,
+               notify_to: str | None = None) -> dict[str, Any]:
     job_id = f"WG-{uuid.uuid4().hex.upper()}"
     now = _now()
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT INTO jobs (id, created_at, updated_at, status, question,
-                              input_kind, raw_input, whatsapp_status, whatsapp_user_id)
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?)
+                              input_kind, raw_input, whatsapp_status, whatsapp_user_id,
+                              source, workflow_mode, requested_program, notify_to)
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?)
             """,
-            (job_id, now, now, question, input_kind, raw_input, whatsapp_user_id),
+            (job_id, now, now, question, input_kind, raw_input, whatsapp_user_id,
+             source, workflow_mode, requested_program, notify_to),
         )
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return _row_to_job(row)
@@ -195,15 +217,69 @@ def get_step_log(job_id: str) -> list[dict[str, Any]]:
 
 
 def create_search(job_id: str, *, kind: str, program: str | None,
-                  database: str | None, parameters: dict, rid: str | None) -> None:
+                  database: str | None, parameters: dict, rid: str | None) -> int:
     with _lock, _connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO searches (job_id, kind, program, database, parameters, rid, status, submitted_at)
             VALUES (?, ?, ?, ?, ?, ?, 'submitted', ?)
             """,
             (job_id, kind, program, database, json.dumps(parameters), rid, _now()),
         )
+        return int(cur.lastrowid)
+
+
+def complete_search(search_id: int, *, hits: list | None = None,
+                    status: str = "done", error: str | None = None) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE searches SET hits = ?, status = ?, error = ?, completed_at = ? WHERE id = ?",
+            (json.dumps(hits or []), status, error, _now(), search_id),
+        )
+
+
+def get_searches(job_id: str) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM searches WHERE job_id = ? ORDER BY id", (job_id,)
+        ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        for key, default in (("parameters", {}), ("hits", [])):
+            try:
+                item[key] = json.loads(item.get(key) or json.dumps(default))
+            except (json.JSONDecodeError, TypeError):
+                item[key] = default
+        out.append(item)
+    return out
+
+
+def list_queued_jobs(limit: int = 50) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT ?", (limit,)
+        ).fetchall()
+    return [_row_to_job(r) for r in rows]
+
+
+def claim_job(job_id: str) -> bool:
+    """Atomically move queued -> running. False if already claimed/done."""
+    with _lock, _connect() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",
+            (_now(), job_id))
+    return cur.rowcount == 1
+
+
+def list_jobs_for_user(whatsapp_user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE whatsapp_user_id = ? OR notify_to = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (whatsapp_user_id, whatsapp_user_id, limit),
+        ).fetchall()
+    return [_row_to_job(r) for r in rows]
 
 
 def running_job_for_user(whatsapp_user_id: str) -> dict[str, Any] | None:

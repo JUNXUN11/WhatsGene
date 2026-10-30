@@ -9,7 +9,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in NCBI_EMAIL at minimum
+cp .env.example .env   # set BLASTDB at minimum (or SEARCH_BACKEND=ncbi + NCBI_EMAIL)
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -25,7 +25,10 @@ python -m app.tests.test_classify          # classification thresholds
 python -m unittest discover -s tests -v    # offline eval harness + loop/chat (fixtures, no network)
 ```
 
-Live NCBI submission is behind `app/blast_backend.py` (NCBIWebBackend) and
-is not wired yet — the loop reports that clearly instead of faking results.
-WhatsApp is the product entry point (`POST /webhooks/whatsapp`); `POST /jobs`
-remains for dev/testing.
+Search backends live in `app/search_backend.py`, selected by `SEARCH_BACKEND`
+in `.env`: `local` (default — BLAST+ `blastp`/`blastn` against a preformatted
+swissprot copy at `$BLASTDB`), `ncbi` (opt-in remote: tool+email, max 1
+in-flight RID, polls ≥ 60s apart, aborts after 30 min), `fixture` (recorded
+JSON from `tests/fixtures`, for tests and demo). `cp .env.example .env` and set
+`BLASTDB` (local) or `NCBI_EMAIL` + `SEARCH_BACKEND=ncbi` (remote).
+Jobs start on the website (`POST /jobs`, queues a workflow and returns at once) or on WhatsApp (`POST /webhooks/whatsapp`); the background worker runs many workflows at once (`python -m app.worker`, or the in-process drainer under uvicorn) and WhatsApps each result when done. Ask about a stored workflow via WhatsApp or `POST /jobs/{id}/ask`.
