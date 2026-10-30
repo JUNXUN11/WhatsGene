@@ -64,6 +64,26 @@ def health() -> dict:
     return {"status": "ok", "service": "whatsgene-backend"}
 
 
+@app.get("/privacy")
+def privacy() -> dict:
+    """Public privacy policy (Meta app publishing requirement)."""
+    return {
+        "service": "WhatsGene",
+        "summary": (
+            "WhatsGene is a research and education tool, not medical advice. "
+            "We store your submitted sequence/accession, question, search parameters "
+            "(program, database, E-value threshold, word size, matrix), parsed hits, "
+            "and step log so results can be shown and follow-up questions answered "
+            "from stored values. Your WhatsApp number is stored server-side only as "
+            "your job-history key and is never shown on results pages. Local searches "
+            "run on our server; remote searches send the sequence to NCBI's public "
+            "BLAST service. Message 'forget my history' on WhatsApp at any time to "
+            "delete your stored job history."
+        ),
+        "contact": "junxun288@gmail.com",
+    }
+
+
 @app.post("/jobs", status_code=201)
 def create_job(body: JobCreate) -> dict:
     """Queue a workflow and return at once; the worker runs it."""
