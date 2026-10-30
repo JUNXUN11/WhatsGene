@@ -14,6 +14,11 @@ frontend/.nuxt/
 frontend/.output/
 frontend/.env
 
+# Local-only — kept on this machine, never uploaded
+/AGENTS.md
+/docs/
+/reference/
+
 # OS / editor
 .DS_Store
 .idea/
