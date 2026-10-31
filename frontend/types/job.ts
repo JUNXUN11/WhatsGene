@@ -61,6 +61,9 @@ export interface Job {
   intent?: Record<string, unknown>
   searches_used?: number
   step_log?: StepLogEntry[]
+  msa_alignment?: string | null
+  tree_newick?: string | null
+  homologs?: Array<Record<string, unknown>>
   whatsapp_status?: string
   notified_at?: string | null
   notify_configured?: boolean

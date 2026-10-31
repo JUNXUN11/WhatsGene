@@ -51,7 +51,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     source TEXT NOT NULL DEFAULT 'whatsapp',
     workflow_mode TEXT NOT NULL DEFAULT 'auto',
     requested_program TEXT,
-    notify_to TEXT
+    notify_to TEXT,
+    msa_alignment TEXT,
+    tree_newick TEXT,
+    homologs TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS searches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +95,9 @@ _JOB_COLUMNS: dict[str, str] = {
     "workflow_mode": "TEXT NOT NULL DEFAULT 'auto'",
     "requested_program": "TEXT",
     "notify_to": "TEXT",
+    "msa_alignment": "TEXT",
+    "tree_newick": "TEXT",
+    "homologs": "TEXT NOT NULL DEFAULT '[]'",
 }
 _SEARCH_COLUMNS: dict[str, str] = {
     "hits": "TEXT NOT NULL DEFAULT '[]'",
@@ -127,7 +133,7 @@ def init_db() -> None:
 
 def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
     job = dict(row)
-    for key, default in (("parameters", {}), ("hits", []), ("intent", {})):
+    for key, default in (("parameters", {}), ("hits", []), ("intent", {}), ("homologs", [])):
         try:
             job[key] = json.loads(job.get(key) or json.dumps(default))
         except (json.JSONDecodeError, TypeError):
@@ -173,7 +179,7 @@ def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
 def update_job(job_id: str, **fields: Any) -> dict[str, Any] | None:
     if not fields:
         return get_job(job_id)
-    for key in ("parameters", "hits", "intent"):
+    for key in ("parameters", "hits", "intent", "homologs"):
         if key in fields and not isinstance(fields[key], str):
             fields[key] = json.dumps(fields[key])
     fields["updated_at"] = _now()

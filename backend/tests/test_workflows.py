@@ -318,3 +318,52 @@ class TestHIVExclusion(Base):
         self.assertIsNone(by_acc["HIV2POL"]["taxa_flag"])
         self.assertEqual(by_acc["ECTNP"]["taxa_flag"], "unexpected_taxa")
         self.assertIn("flagged unexpected taxa", final["summary"])
+
+
+class TestMsaTree(Base):
+    """Tier 2: MSA (Lab 06) -> NJ tree, Poisson + complete deletion (Lab 07)."""
+
+    def test_complete_deletion_drops_gap_columns(self):
+        from app.msa import complete_deletion
+
+        records = [{"label": "a", "sequence": "ACGT"}, {"label": "b", "sequence": "A-GT"}]
+        cleaned = complete_deletion(records)
+        self.assertEqual([r["sequence"] for r in cleaned], ["AGT", "AGT"])
+
+    def test_poisson_distance(self):
+        from app.msa import poisson_distance
+
+        self.assertEqual(poisson_distance("AAAA", "AAAA"), 0.0)
+        self.assertAlmostEqual(poisson_distance("AAAA", "AATT"), 0.6931, places=3)
+
+    def test_tree_needs_three_sequences(self):
+        from app.msa import MsaError, build_tree_newick
+
+        with self.assertRaises(MsaError):
+            build_tree_newick([{"label": "a", "sequence": "AAAA"},
+                               {"label": "b", "sequence": "AAAT"}])
+
+    def test_workflow_continues_into_alignment_and_tree(self):
+        from app.msa import FixtureMsa, run_alignment
+
+        hits = [
+            {"accession": "HIT1", "organism": "C. elegans", "annotation": "globin-like protein",
+             "identity": 60.0, "query_start": 1, "query_end": 12, "alignment_length": 12,
+             "subject_length": 14, "bit_score": 40.0, "evalue": 1e-12, "sequence": SHORT_QUERY},
+            {"accession": "HIT2", "organism": "C. briggsae", "annotation": "globin-like protein",
+             "identity": 55.0, "query_start": 1, "query_end": 12, "alignment_length": 12,
+             "subject_length": 14, "bit_score": 38.0, "evalue": 1e-11, "sequence": "PNLHGLFGRKTA"},
+        ]
+        backend = Fixture(primary_hits=hits, reciprocal_hits={
+            "HIT1": [{"accession": "RECIP1", "evalue": 1e-10, "annotation": "globin",
+                      "query_start": 1, "query_end": 12, "subject_length": 14}]})
+        job = db.create_job(question="Identify this protein", raw_input=SHORT_QUERY,
+                            whatsapp_user_id="u1", source="web", workflow_mode="auto")
+        final = process_job(job, backend)
+        self.assertEqual(final["outcome"], "confirmed")
+        aligned = run_alignment(job=final, search_backend=backend, msa_backend=FixtureMsa())
+        self.assertIn("HIT1", aligned["msa_alignment"])
+        self.assertIn("HIT2", aligned["tree_newick"])
+        steps = [s["step"] for s in db.get_step_log(final["id"])]
+        self.assertIn("align", steps)
+        self.assertIn("tree", steps)

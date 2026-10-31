@@ -2,13 +2,15 @@
 import type { Job } from '~/types/job'
 
 const route = useRoute()
-const { getJob, cancelJob, askJob } = useApi()
+const { getJob, cancelJob, askJob, alignJob } = useApi()
 
 const job = ref<Job | null>(null)
 const error = ref('')
 const askText = ref('')
 const answer = ref('')
 const asking = ref(false)
+const aligning = ref(false)
+const alignError = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
 
 async function load() {
@@ -60,6 +62,20 @@ async function ask() {
     answer.value = err.message || 'Could not ask right now.'
   } finally {
     asking.value = false
+  }
+}
+
+async function align() {
+  if (!job.value) return
+  aligning.value = true
+  alignError.value = ''
+  try {
+    job.value = await alignJob(job.value.id)
+  } catch (e: unknown) {
+    const err = e as { data?: { detail?: string }; message?: string }
+    alignError.value = err.data?.detail || err.message || 'Alignment failed.'
+  } finally {
+    aligning.value = false
   }
 }
 
@@ -166,6 +182,18 @@ const suggestions = [
         <div class="card" style="background: #fff;">{{ job.summary }}</div>
       </template>
 
+      <h2>Alignment and tree (Tier 2)</h2>
+      <p style="font-size: 14px; color: var(--muted);">From the confirmed homologs of this workflow: MAFFT alignment (Lab 06), then a neighbor-joining tree with Poisson-corrected distances after complete deletion of gap columns (Lab 07). No bootstrapping — that stays roadmap-only.</p>
+      <button v-if="job.status === 'done' && !job.msa_alignment" class="btn" :disabled="aligning" @click="align">{{ aligning ? 'Aligning…' : 'Build MSA + tree' }}</button>
+      <p v-if="alignError" class="error">{{ alignError }}</p>
+      <template v-if="job.msa_alignment">
+        <p style="font-size: 14px;"><strong>Homologs:</strong> {{ (job.homologs || []).map(h => String(h.label)).join(', ') }}</p>
+        <h3>Multiple sequence alignment</h3>
+        <pre class="seqblock">{{ job.msa_alignment }}</pre>
+        <h3>Neighbor-joining tree (Newick)</h3>
+        <pre class="seqblock">{{ job.tree_newick }}</pre>
+      </template>
+
       <h2>Ask about this workflow</h2>
       <p style="font-size: 14px; color: var(--muted);">Answers quote stored E-values, parameters and hits only. If the stored results cannot answer, it will say so. The same questions work on WhatsApp — include the job ID, e.g. “What was the E-value cutoff for {{ job.id }}?”</p>
       <div class="sample-row" style="margin-bottom: 10px;">
@@ -202,3 +230,15 @@ const suggestions = [
     </template>
   </main>
 </template>
+
+<style scoped>
+.seqblock {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+</style>

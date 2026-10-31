@@ -125,6 +125,27 @@ def get_job(job_id: str) -> dict:
     return _public_job(job)
 
 
+@app.post("/jobs/{job_id}/align")
+def align_job(job_id: str) -> dict:
+    """Tier 2: MSA + neighbor-joining tree from confirmed homologs."""
+    from .msa import MsaError, run_alignment
+
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail="Alignment needs a finished workflow.")
+    try:
+        backend = get_backend()
+    except SearchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        final = run_alignment(job=job, search_backend=backend)
+    except MsaError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _public_job(final)
+
+
 @app.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str) -> dict:
     job = db.get_job(job_id)
