@@ -150,6 +150,34 @@ class TestParallelJobs(Base):
         self.assertIn("200000", result["reply"])
 
 
+class TestCharterCases(Base):
+    """Owner charter cases from real lab work (Lab 04 Q3 neuroglobin)."""
+
+    def test_neuroglobin_moss_hits_at_e10ish_are_not_significant(self):
+        from app.classify import classify_hit
+
+        for evalue in (9.9, 12.0, 18.0):
+            self.assertEqual(classify_hit(evalue, 88.0), "not_significant")
+
+    def test_raised_threshold_hits_never_become_a_claim(self):
+        sequence = "MVHLTPEEKSAV" * 13  # ~156 aa neuroglobin-like query
+        hits = [{
+            "accession": "XP_001764902", "organism": "Physcomitrella patens",
+            "annotation": "predicted protein", "identity": 27.0,
+            "query_start": 1, "query_end": 138, "alignment_length": 138,
+            "subject_length": 150, "bit_score": 45.0, "evalue": 12.0,
+            "sequence": "MVHLTP",
+        }]
+        backend = Fixture(primary_hits=hits, reciprocal_hits={})
+        job = db.create_job(question="Do mosses have globins?", raw_input=sequence,
+                            whatsapp_user_id="u1", source="web", workflow_mode="auto")
+        final = process_job(job, backend)
+        self.assertEqual(final["hits"][0]["classification"], "not_significant")
+        self.assertEqual(final["outcome"], "not_confirmed")
+        searches = db.get_searches(final["id"])
+        self.assertEqual(searches[0]["hits"][0]["evalue"], 12.0)
+
+
 class TestWhatsAppClient(Base):
     def test_payload_builders(self):
         text = whatsapp_client.build_text_payload(to="123", body="done")
@@ -196,3 +224,30 @@ class TestWebApi(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAccessionSubrange(Base):
+    """Lab 04 Q2: RBP4 CDS slice NM_006744.4 bases 84-689."""
+
+    def test_parse_accession_query(self):
+        from app.validate import parse_accession_query
+
+        self.assertEqual(parse_accession_query("NM_006744.4:84-689"),
+                         ("NM_006744.4", (84, 689)))
+        self.assertEqual(parse_accession_query("NP_000509"), ("NP_000509", None))
+
+    def test_workflow_searches_only_the_cds_slice(self):
+        full = "C" * 83 + "ATGAAA" + "ACGT" * 150 + "TAA"  # 692 bases
+        backend = Fixture(
+            sequences={"NM_006744.4": {"accession": "NM_006744.4", "organism": "Homo sapiens",
+                                       "annotation": "retinol binding protein 4", "sequence": full}},
+            primary_hits=[], reciprocal_hits={})
+        job = db.create_job(question="Identify this coding sequence",
+                            raw_input="NM_006744.4:84-689", source="web")
+        final = process_job(job, backend)
+        self.assertEqual(final["query_length"], 606)  # 689-84+1
+        self.assertTrue(final["sequence"].startswith("ATGAAA"))
+        self.assertEqual(final["parameters"]["subrange"],
+                         {"accession": "NM_006744.4", "start": 84, "end": 689})
+        steps = [s["step"] for s in db.get_step_log(final["id"])]
+        self.assertIn("fetch_accession", steps)

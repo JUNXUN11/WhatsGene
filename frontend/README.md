@@ -1,6 +1,6 @@
 # WhatsGene — Frontend (Nuxt)
 
-Nuxt (Vue 3, TypeScript). Submit form, job status, and shareable results page.
+Nuxt (Vue 3, TypeScript). Landing page, workflow submission, parallel job manager with live status, rich results, and Ask box. WhatsApp is deferred; see decision 004.
 Talks to the FastAPI backend — see `../docs/ARCHITECTURE.md`.
 
 ## Run

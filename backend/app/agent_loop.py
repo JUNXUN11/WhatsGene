@@ -18,7 +18,7 @@ from . import agent, config, db, rules_engine
 from .blast_params import parameters_for
 from .search_backend import SearchBackend, SearchError
 from .classify import classify_hits
-from .validate import ValidationError, detect_type, looks_like_accession, normalise_sequence
+from .validate import ValidationError, detect_type, looks_like_accession, normalise_sequence, parse_accession_query
 from .verify import coverage_from_coordinates, verify_candidate
 
 Milestone = Callable[[dict, str], None]
@@ -71,8 +71,9 @@ def process_job(job: dict, backend: SearchBackend,
     accession: str | None = None
     query_annotation = ""
     query_organism: str | None = None
-    if looks_like_accession(raw):
-        accession = raw.upper()
+    accession_candidate, subrange = parse_accession_query(raw)
+    if looks_like_accession(accession_candidate):
+        accession = accession_candidate.upper()
         try:
             record = backend.fetch_by_accession(accession)
         except SearchError as exc:
@@ -81,6 +82,20 @@ def process_job(job: dict, backend: SearchBackend,
             return db.update_job(job_id, status="failed", input_kind="accession",
                                  accession=accession, error=str(exc)) or job
         sequence = (record.get("sequence") or "").upper()
+        if subrange is not None:
+            start, end = subrange
+            if not (1 <= start <= end <= len(sequence)):
+                _log(job_id, step="fetch_accession", observation=f"{accession}:{start}-{end}",
+                     decision="fail job",
+                     reason=f"Subrange {start}-{end} is outside the fetched sequence (length {len(sequence)}).")
+                return db.update_job(job_id, status="failed", input_kind="accession",
+                                     accession=accession,
+                                     error=f"Subrange {start}-{end} is outside {accession} (length {len(sequence)}).") or job
+            sequence = sequence[start - 1:end]
+            _log(job_id, step="fetch_accession",
+                 observation=f"{accession} bases {start}-{end} -> {len(sequence)} bases (CDS slice)",
+                 decision="use subrange sequence",
+                 reason="Accession subrange applied in code (Lab 04 Q2 CDS pattern, blast-rules §11).")
         query_annotation = record.get("annotation", "") or record.get("organism", "")
         query_organism = (record.get("organism") or "").strip() or None
         organism_match = re.search(r"\[([^\]]+)\]\s*$", query_annotation)
@@ -153,6 +168,8 @@ def process_job(job: dict, backend: SearchBackend,
                 "deviation_applied": applied_deviation}
 
     primary_params = params_for_spec(choice, "primary")
+    if subrange is not None and accession:
+        primary_params["subrange"] = {"accession": accession, "start": subrange[0], "end": subrange[1]}
     if primary_params.get("short_query_adjusted"):
         _log(job_id, step="short_query",
              observation=f"{choice['program']} query length {len(sequence)}",

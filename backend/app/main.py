@@ -184,6 +184,16 @@ def whatsapp_verify(request: Request) -> object:
 @app.post("/webhooks/whatsapp")
 async def whatsapp_inbound(request: Request) -> dict:
     payload = await request.json()
+    # TEMP DEBUG (delivery diagnosis): record every webhook payload,
+    # including message statuses with Meta's failure reasons.
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+
+        with _Path("/tmp/whatsgene-webhooks.log").open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(payload) + "\n")
+    except Exception:
+        pass
     replies: list[dict] = []
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):

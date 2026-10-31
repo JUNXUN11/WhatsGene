@@ -21,6 +21,24 @@ def looks_like_accession(text: str) -> bool:
     return bool(_ACCESSION_RE.match(text.strip().upper()))
 
 
+_SUBRANGE_RE = re.compile(r"^([A-Z]{1,3}_?\d+(?:\.\d+)?):(\d+)-(\d+)$")
+
+
+def parse_accession_query(raw: str) -> tuple[str, tuple[int, int] | None]:
+    """Split 'NM_006744.4:84-689' into (accession, (start, end) 1-based incl.).
+
+    Plain accessions return (accession, None). Anything else returns the
+    input unchanged with None, so callers fall back to sequence handling.
+    """
+    text = (raw or "").strip().upper()
+    match = _SUBRANGE_RE.match(text)
+    if match:
+        return match.group(1), (int(match.group(2)), int(match.group(3)))
+    if looks_like_accession(text):
+        return text, None
+    return (raw or "").strip(), None
+
+
 def normalise_sequence(raw: str) -> tuple[str, str | None]:
     """Return (sequence, fasta_header_or_None). Raises ValidationError."""
     text = (raw or "").strip()
