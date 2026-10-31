@@ -17,7 +17,7 @@ from typing import Callable
 from . import agent, config, db, rules_engine
 from .blast_params import parameters_for
 from .search_backend import SearchBackend, SearchError
-from .classify import classify_hits
+from .classify import classify_hits, flag_unexpected_taxa
 from .validate import ValidationError, detect_type, looks_like_accession, normalise_sequence, parse_accession_query
 from .verify import coverage_from_coordinates, verify_candidate
 
@@ -162,7 +162,8 @@ def process_job(job: dict, backend: SearchBackend,
     def params_for_spec(spec: dict, kind: str) -> dict:
         base = parameters_for(program=spec["program"], detected_type=detected,
                               query_length=len(sequence),
-                              organism_filter=spec.get("organism_filter"))
+                              organism_filter=spec.get("organism_filter"),
+                              exclude_organism=spec.get("exclude_organism"))
         return {"backend": backend.name, **base, "kind": kind,
                 "rationale": spec["reason"], "rule": spec["rule"],
                 "deviation_applied": applied_deviation}
@@ -230,7 +231,9 @@ def process_job(job: dict, backend: SearchBackend,
             _log(job_id, step="poll", observation=f"RID {rid}", decision="fail search", reason=str(exc))
             last_error = str(exc)
             return None
-        hits = classify_hits(_with_coverage(raw_hits, len(sequence)))
+        hits = flag_unexpected_taxa(
+            classify_hits(_with_coverage(raw_hits, len(sequence))),
+            query_organism=query_organism or "", query_annotation=query_annotation)
         db.complete_search(search_id, hits=hits, status="done")
         successful_searches += 1
         counts: dict[str, int] = {}

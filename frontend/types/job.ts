@@ -23,6 +23,7 @@ export interface Hit {
   bit_score?: number
   evalue?: number
   classification?: Classification
+  taxa_flag?: string | null
 }
 
 export interface SearchResult {

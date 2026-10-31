@@ -143,7 +143,7 @@ const suggestions = [
         <h2>Hits (primary search)</h2>
         <table class="hits">
           <thead>
-            <tr><th>Accession</th><th>Organism</th><th>Identity</th><th>Coverage</th><th>Bit score</th><th>E-value</th><th>Class</th></tr>
+            <tr><th>Accession</th><th>Organism</th><th>Identity</th><th>Coverage</th><th>Bit score</th><th>E-value</th><th>Class</th><th>Taxa flag</th></tr>
           </thead>
           <tbody>
             <tr v-for="hit in job.hits" :key="hit.accession">
@@ -154,6 +154,7 @@ const suggestions = [
               <td>{{ fmt(hit.bit_score) }}</td>
               <td>{{ fmt(hit.evalue) }}</td>
               <td :class="`class-${hit.classification}`">{{ hit.classification || '—' }}</td>
+              <td><span v-if="hit.taxa_flag" class="class-borderline">{{ hit.taxa_flag }}</span><span v-else>—</span></td>
             </tr>
           </tbody>
         </table>

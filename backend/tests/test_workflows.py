@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import agent, chat, config, db, worker  # noqa: E402
 from app.agent_loop import process_job  # noqa: E402
 from app.blast_params import parameters_for  # noqa: E402
+from app.intent import parse_intent as parse_intent_local  # noqa: E402
 from app.rules_engine import applicable_programs, plan_programs  # noqa: E402
 from app.search_backend import Fixture  # noqa: E402
 from app import whatsapp_client  # noqa: E402
@@ -251,3 +252,69 @@ class TestAccessionSubrange(Base):
                          {"accession": "NM_006744.4", "start": 84, "end": 689})
         steps = [s["step"] for s in db.get_step_log(final["id"])]
         self.assertIn("fetch_accession", steps)
+
+
+class TestHIVExclusion(Base):
+    """Lab 04 Q4: HIV-1 pol excluding HIV-1, both backends + taxa flag."""
+
+    def test_intent_extracts_hiv1_exclusion(self):
+        intent = parse_intent_local("Is HIV-1 pol closer to HIV-2 or SIV, excluding HIV-1?")
+        self.assertEqual(intent["exclude_organism"], "Human immunodeficiency virus 1")
+
+    def test_entrez_query_builds_not_exclusion(self):
+        from app.search_backend import build_entrez_query
+
+        self.assertEqual(build_entrez_query(None, "Human immunodeficiency virus 1"),
+                         'NOT "Human immunodeficiency virus 1"[Organism]')
+        self.assertEqual(build_entrez_query("nematodes", None), '"nematodes"[Organism]')
+        self.assertEqual(build_entrez_query("viruses", "Human immunodeficiency virus 1"),
+                         '"viruses"[Organism] NOT "Human immunodeficiency virus 1"[Organism]')
+        self.assertIsNone(build_entrez_query(None, None))
+
+    def test_local_filter_excludes_taxon(self):
+        from app.search_backend import select_seqids_filtered
+
+        taxid_map = "sp|P1|HIV1\t11676\nsp|P2|ECOLI\t562\nsp|P3|HUMAN\t9606\n"
+        self.assertEqual(select_seqids_filtered(taxid_map, None, {11676}),
+                         ["sp|P2|ECOLI", "sp|P3|HUMAN"])
+        self.assertEqual(select_seqids_filtered(taxid_map, {9606}, {11676}), ["sp|P3|HUMAN"])
+
+    def test_taxa_flag_marks_bacterial_hit_only(self):
+        from app.classify import flag_unexpected_taxa
+
+        hits = [
+            {"accession": "HIV2POL", "organism": "Human immunodeficiency virus 2", "annotation": "pol protein"},
+            {"accession": "SIVPOL", "organism": "Simian immunodeficiency virus", "annotation": "pol protein"},
+            {"accession": "ECTNP", "organism": "Escherichia coli", "annotation": "transposase"},
+        ]
+        flagged = flag_unexpected_taxa(hits, query_organism="Human immunodeficiency virus 1",
+                                       query_annotation="Gag-Pol polyprotein")
+        self.assertIsNone(flagged[0]["taxa_flag"])
+        self.assertIsNone(flagged[1]["taxa_flag"])
+        self.assertEqual(flagged[2]["taxa_flag"], "unexpected_taxa")
+
+    def test_workflow_stores_exclusion_and_flags(self):
+        sequence = "MVHLTPEEKSAV" * 120  # long viral-like protein query
+        hits = [
+            {"accession": "HIV2POL", "organism": "Human immunodeficiency virus 2",
+             "annotation": "pol protein", "identity": 55.0, "query_start": 1, "query_end": 1400,
+             "alignment_length": 1400, "subject_length": 1450, "bit_score": 900.0,
+             "evalue": 0.0, "sequence": "MVHLTP"},
+            {"accession": "ECTNP", "organism": "Escherichia coli", "annotation": "transposase",
+             "identity": 30.0, "query_start": 10, "query_end": 400, "alignment_length": 390,
+             "subject_length": 420, "bit_score": 120.0, "evalue": 1e-20, "sequence": "MVHLTP"},
+        ]
+        backend = Fixture(
+            sequences={"NP_057849": {"accession": "NP_057849.4", "organism": "Human immunodeficiency virus 1",
+                                     "annotation": "Gag-Pol polyprotein", "sequence": sequence}},
+            primary_hits=hits, reciprocal_hits={})
+        job = db.create_job(question="Is HIV-1 pol closer to HIV-2 or SIV, excluding HIV-1?",
+                            raw_input="NP_057849", source="web", workflow_mode="auto")
+        final = process_job(job, backend)
+        searches = db.get_searches(final["id"])
+        self.assertEqual(searches[0]["parameters"]["exclude_organism"],
+                         "Human immunodeficiency virus 1")
+        by_acc = {h["accession"]: h for h in final["hits"]}
+        self.assertIsNone(by_acc["HIV2POL"]["taxa_flag"])
+        self.assertEqual(by_acc["ECTNP"]["taxa_flag"], "unexpected_taxa")
+        self.assertIn("flagged unexpected taxa", final["summary"])

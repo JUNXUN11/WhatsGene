@@ -70,12 +70,15 @@ def summarise(*, job: dict, hits: list[dict], outcome: str | None,
                      f"word size {params.get('word_size')}, matrix {params.get('matrix')}"
                      + (" (short-query adjusted)." if params.get("short_query_adjusted") else "."))
     why = f" Why: {params['rationale']}" if params.get("rationale") else ""
+    flagged = sum(1 for h in hits if h.get("taxa_flag") == "unexpected_taxa")
+    taxa_note = (f" {flagged} hit(s) flagged unexpected taxa — inspect before any claim."
+                 if flagged else "")
     return (
         f"Top hit: {top.get('accession', '?')} ({top.get('organism', 'unknown organism')}), "
         f"E-value {top.get('evalue', '?')}, identity {top.get('identity', '?')}%, "
         f"coverage {top.get('query_coverage', '?')}%, classified as {top.get('classification', '?')}. "
         f"Search: {program} against {database}.{param_ctx}{why} "
-        f"Outcome: {outcome or 'not confirmed'}.{verdict}"
+        f"Outcome: {outcome or 'not confirmed'}.{verdict}{taxa_note}"
     )
 
 
