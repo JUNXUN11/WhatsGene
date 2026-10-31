@@ -174,6 +174,11 @@ def _public_job(job: dict) -> dict:
     public = {k: v for k, v in job.items() if k not in ("whatsapp_user_id", "notify_to")}
     public["step_log"] = db.get_step_log(job["id"])
     public["searches"] = db.get_searches(job["id"])
+    public["related_jobs"] = [
+        {"id": r["id"], "question": r.get("question"), "status": r.get("status"),
+         "outcome": r.get("outcome"), "program": r.get("program"),
+         "created_at": r.get("created_at")}
+        for r in db.related_jobs(job)]
     public["notify_configured"] = bool(job.get("notify_to") or job.get("whatsapp_user_id"))
     public["results_url"] = f"{config.FRONTEND_BASE_URL}/jobs/{job['id']}"
     backend_name = (job.get("parameters") or {}).get("backend", "ncbi")

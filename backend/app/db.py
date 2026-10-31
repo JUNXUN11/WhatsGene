@@ -278,6 +278,28 @@ def claim_job(job_id: str) -> bool:
     return cur.rowcount == 1
 
 
+def related_jobs(job: dict, limit: int = 5) -> list[dict[str, Any]]:
+    """Earlier workflows related by accession or identical sequence.
+
+    Deterministic relevance (PRD Open question #5, website form): same
+    resolved accession, or the same normalised sequence. Newest first.
+    """
+    clauses, params = [], []
+    if job.get("accession"):
+        clauses.append("accession = ?")
+        params.append(job["accession"])
+    if job.get("sequence"):
+        clauses.append("sequence = ?")
+        params.append(job["sequence"])
+    if not clauses:
+        return []
+    sql = ("SELECT * FROM jobs WHERE id != ? AND (" + " OR ".join(clauses) +
+           ") ORDER BY created_at DESC LIMIT ?")
+    with _connect() as conn:
+        rows = conn.execute(sql, (job["id"], *params, limit)).fetchall()
+    return [_row_to_job(r) for r in rows]
+
+
 def list_jobs_for_user(whatsapp_user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(

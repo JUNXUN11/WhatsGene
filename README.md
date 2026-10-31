@@ -69,7 +69,7 @@ cd frontend && npm run build
 ```
 
 Offline eval suite on textbook/lab cases (beta globin, insulin, RBP4,
-neuroglobin-vs-mosses, short-query profile, CDS subrange): **72 tests,
+neuroglobin-vs-mosses, short-query profile, CDS subrange, HIV-1 exclusion, MSA/tree): **83 tests,
 all passing**, no network required.
 
 ## Not building yet (roadmap)

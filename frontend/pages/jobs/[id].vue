@@ -182,6 +182,16 @@ const suggestions = [
         <div class="card" style="background: #fff;">{{ job.summary }}</div>
       </template>
 
+      <template v-if="job.related_jobs && job.related_jobs.length">
+        <h2>Related earlier workflows</h2>
+        <p style="font-size: 14px; color: var(--muted);">Same accession or same sequence as an earlier run — your research trail, stored server-side.</p>
+        <div v-for="r in job.related_jobs" :key="r.id" class="card" style="margin: 8px 0; padding: 12px 16px;">
+          <NuxtLink :to="`/jobs/${r.id}`" style="font-weight: 600; text-decoration: none;">{{ r.id }}</NuxtLink>
+          <span class="status-pill" :class="`status-${r.status}`" style="margin-left: 8px;">{{ r.status }}</span>
+          <span style="font-size: 13px; color: var(--muted);"> {{ r.program || '' }} · {{ r.outcome || '' }}<span v-if="r.question"> · “{{ r.question }}”</span></span>
+        </div>
+      </template>
+
       <h2>Alignment and tree (Tier 2)</h2>
       <p style="font-size: 14px; color: var(--muted);">From the confirmed homologs of this workflow: MAFFT alignment (Lab 06), then a neighbor-joining tree with Poisson-corrected distances after complete deletion of gap columns (Lab 07). No bootstrapping — that stays roadmap-only.</p>
       <button v-if="job.status === 'done' && !job.msa_alignment" class="btn" :disabled="aligning" @click="align">{{ aligning ? 'Aligning…' : 'Build MSA + tree' }}</button>

@@ -61,6 +61,7 @@ export interface Job {
   intent?: Record<string, unknown>
   searches_used?: number
   step_log?: StepLogEntry[]
+  related_jobs?: Array<{ id: string; question?: string; status?: string; outcome?: string | null; program?: string | null; created_at?: string }>
   msa_alignment?: string | null
   tree_newick?: string | null
   homologs?: Array<Record<string, unknown>>

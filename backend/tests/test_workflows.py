@@ -367,3 +367,26 @@ class TestMsaTree(Base):
         steps = [s["step"] for s in db.get_step_log(final["id"])]
         self.assertIn("align", steps)
         self.assertIn("tree", steps)
+
+
+class TestResearchMemory(Base):
+    """2 Nov (website form): a new workflow visibly links to earlier ones."""
+
+    def _run_globin(self, backend) -> dict:
+        job = db.create_job(question="Identify this protein", raw_input=SHORT_QUERY,
+                            whatsapp_user_id="mem", source="web", workflow_mode="auto")
+        return process_job(job, backend)
+
+    def test_second_run_links_to_first_by_sequence(self):
+        self._run_globin(_backend())
+        second = self._run_globin(_backend())
+        related = db.related_jobs(second)
+        self.assertEqual(len(related), 1)
+        self.assertNotEqual(related[0]["id"], second["id"])
+
+    def test_unrelated_sequence_has_no_links(self):
+        self._run_globin(_backend())
+        other = db.create_job(question="q", raw_input="ACGTACGTACGTACGTACGT",
+                              whatsapp_user_id="mem", source="web")
+        other = process_job(other, Fixture(primary_hits=[], reciprocal_hits={}))
+        self.assertEqual(db.related_jobs(other), [])
