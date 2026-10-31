@@ -56,7 +56,7 @@ npm install
 npm run dev   # http://localhost:3000
 ```
 
-Search backends (`SEARCH_BACKEND` in `backend/.env`): `local` (default —
+Search backends are chosen **per workflow on the website** (server default / local / real NCBI; `SEARCH_BACKEND` in `backend/.env` sets the host default): `local` (default —
 BLAST+ against a local database at `$BLASTDB`), `ncbi` (opt-in remote:
 submit at most once per in-flight search, poll each RID no more than once
 a minute), `fixture` (recorded data for tests and demos).

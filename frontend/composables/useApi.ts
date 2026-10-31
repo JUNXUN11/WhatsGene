@@ -4,6 +4,7 @@ export interface JobCreateOptions {
   workflow_mode?: 'auto' | 'single' | 'all'
   program?: string | null
   whatsapp_number?: string | null
+  search_backend?: 'server' | 'local' | 'ncbi'
 }
 
 export function useApi() {
@@ -16,6 +17,7 @@ export function useApi() {
       body: {
         sequence, question,
         workflow_mode: options.workflow_mode || 'auto',
+        search_backend: options.search_backend || 'server',
         program: options.program || null,
         whatsapp_number: options.whatsapp_number || null,
         source: 'web',

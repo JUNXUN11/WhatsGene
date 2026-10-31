@@ -112,6 +112,7 @@ const suggestions = [
       <div class="card">
         <h2 style="margin-top: 0;">Search</h2>
         <dl class="meta">
+          <dt>Search backend</dt><dd>{{ job.parameters?.backend || job.backend_choice || '—' }}<span v-if="job.backend_choice"> (chosen: {{ job.backend_choice }})</span></dd>
           <dt>Program</dt><dd>{{ job.program || '—' }}</dd>
           <dt>Database</dt><dd>{{ job.database || '—' }}</dd>
           <dt>Detected type</dt><dd>{{ job.detected_type || '—' }}<span v-if="job.query_length"> · {{ job.query_length }} residues</span></dd>

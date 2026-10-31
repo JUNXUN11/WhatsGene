@@ -50,6 +50,7 @@ class JobCreate(BaseModel):
     sequence: str = Field(description="FASTA text, raw sequence, or NCBI accession (e.g. NP_000509)")
     question: str = Field(default="", description="Plain-language question, e.g. 'Is there a related gene in nematodes?'")
     workflow_mode: str = Field(default="auto", description="auto | single | all")
+    search_backend: str = Field(default="server", description="server | local | ncbi — where this workflow searches")
     program: str | None = Field(default=None, description="Program for workflow_mode=single, e.g. blastp")
     whatsapp_number: str | None = Field(default=None, description="Optional WhatsApp number for the done notification")
     source: str = Field(default="web")
@@ -97,9 +98,9 @@ def create_job(body: JobCreate) -> dict:
     job = db.create_job(question=body.question or "", raw_input=raw,
                         whatsapp_user_id=notify, source=body.source or "web",
                         workflow_mode=mode, requested_program=body.program,
-                        notify_to=notify)
+                        notify_to=notify, backend_choice=(body.search_backend or "server"))
     try:
-        backend = get_backend()
+        backend = worker.backend_for_job(job)
     except SearchError as exc:
         # Queue anyway only if a worker could succeed later; surface config
         # errors now so the user is not left waiting on a dead workflow.

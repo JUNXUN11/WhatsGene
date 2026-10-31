@@ -390,3 +390,56 @@ class TestResearchMemory(Base):
                               whatsapp_user_id="mem", source="web")
         other = process_job(other, Fixture(primary_hits=[], reciprocal_hits={}))
         self.assertEqual(db.related_jobs(other), [])
+
+
+class TestBackendChoice(Base):
+    """Per-workflow backend switch: local server vs real NCBI API."""
+
+    def test_normalize_and_pacing_helpers(self):
+        from app.search_backend import (SearchError, ncbi_submit_wait_seconds,
+                                        normalize_backend_choice)
+
+        self.assertEqual(normalize_backend_choice(None), "server")
+        self.assertEqual(normalize_backend_choice("NCBI"), "ncbi")
+        self.assertEqual(normalize_backend_choice("default"), "server")
+        with self.assertRaises(SearchError):
+            normalize_backend_choice("bogus")
+        self.assertEqual(ncbi_submit_wait_seconds(last_submit_at=None, now=100.0), 0.0)
+        self.assertEqual(ncbi_submit_wait_seconds(last_submit_at=100.0, now=104.0), 6.0)
+        self.assertEqual(ncbi_submit_wait_seconds(last_submit_at=100.0, now=115.0), 0.0)
+
+    def test_server_choice_keeps_configured_fixture(self):
+        from app import worker
+
+        job = db.create_job(question="q", raw_input=SHORT_QUERY, source="web")
+        self.assertEqual(job["backend_choice"], "server")
+        old = config.SEARCH_BACKEND
+        config.SEARCH_BACKEND = "fixture"
+        try:
+            self.assertEqual(worker.backend_for_job(job).name, "fixture")
+        finally:
+            config.SEARCH_BACKEND = old
+
+    def test_choice_is_stored_on_the_job(self):
+        job = db.create_job(question="q", raw_input=SHORT_QUERY, source="web",
+                            backend_choice="ncbi")
+        self.assertEqual(job["backend_choice"], "ncbi")
+        self.assertEqual((db.get_job(job["id"]) or {})["backend_choice"], "ncbi")
+
+    def test_api_stores_user_backend_choice(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        old_backend = config.SEARCH_BACKEND
+        config.SEARCH_BACKEND = "fixture"
+        try:
+            with TestClient(app) as client:
+                created = client.post("/jobs", json={
+                    "sequence": SHORT_QUERY, "question": "parameters?",
+                    "workflow_mode": "single", "program": "blastp",
+                    "search_backend": "server"})
+                self.assertEqual(created.status_code, 201)
+                self.assertEqual(created.json()["backend_choice"], "server")
+        finally:
+            config.SEARCH_BACKEND = old_backend

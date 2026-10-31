@@ -45,6 +45,7 @@ export interface Job {
   input_kind: string
   source?: string
   workflow_mode?: string
+  backend_choice?: string
   requested_program?: string | null
   accession?: string | null
   detected_type?: string

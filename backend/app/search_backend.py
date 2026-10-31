@@ -498,6 +498,9 @@ class NcbiRemote:
 
     name = "ncbi"
 
+    _submit_lock = __import__('threading').Lock()
+    _last_submit_at: float | None = None
+
     def __init__(self) -> None:
         from . import config
 
@@ -552,6 +555,14 @@ class NcbiRemote:
         if getattr(self, "_guard", None) is None:
             self._guard = InflightGuard()
         self._guard.check_free()  # refuse before any NCBI request
+        import time as _time
+
+        with NcbiRemote._submit_lock:
+            wait = ncbi_submit_wait_seconds(
+                last_submit_at=NcbiRemote._last_submit_at, now=_time.monotonic())
+            if wait:
+                _time.sleep(wait)
+            NcbiRemote._last_submit_at = _time.monotonic()
         ncbi_db = _DB_MAP.get(database, database)
         data = {
             "CMD": "Put",
@@ -696,6 +707,45 @@ class Fixture:
             candidate = sub["parameters"].get("candidate_accession", "")
             return [dict(h) for h in self._reciprocal.get(candidate, [])]
         return [dict(h) for h in self._primary]
+
+
+_BACKEND_CHOICES = ("server", "local", "ncbi", "fixture")
+
+
+def normalize_backend_choice(choice: str | None) -> str:
+    """Normalise a per-workflow backend choice. Pure."""
+    value = (choice or "server").strip().lower()
+    if value in ("default", ""):
+        value = "server"
+    if value not in _BACKEND_CHOICES:
+        raise SearchError(
+            f"Unknown search backend {choice!r}. Use server, local, ncbi, or fixture.")
+    return value
+
+
+def get_backend_for_choice(choice: str | None) -> SearchBackend:
+    """Build the backend for one workflow's choice.
+
+    "server" keeps the configured SEARCH_BACKEND; local/ncbi/fixture
+    override it for this workflow only.
+    """
+    from . import config
+
+    value = normalize_backend_choice(choice)
+    if value == "server":
+        return get_backend()
+    if value == "local":
+        return LocalBlast()
+    if value == "ncbi":
+        return NcbiRemote()
+    return Fixture(config.FIXTURE_CASE or None)
+
+
+def ncbi_submit_wait_seconds(*, last_submit_at: float | None, now: float) -> float:
+    """Seconds to wait so NCBI submits are >= 10s apart (charter). Pure."""
+    if last_submit_at is None:
+        return 0.0
+    return max(0.0, 10.0 - (now - last_submit_at))
 
 
 def get_backend() -> SearchBackend:

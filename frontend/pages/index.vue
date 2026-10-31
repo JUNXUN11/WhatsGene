@@ -7,6 +7,7 @@ const question = ref('')
 const mode = ref<'auto' | 'single' | 'all'>('auto')
 const program = ref('blastp')
 const whatsapp = ref('')
+const searchBackend = ref<'server' | 'local' | 'ncbi'>('server')
 const busy = ref(false)
 const error = ref('')
 
@@ -32,6 +33,7 @@ async function submit() {
   try {
     const job = await createJob(sequence.value.trim(), question.value.trim(), {
       workflow_mode: mode.value,
+      search_backend: searchBackend.value,
       program: mode.value === 'single' ? program.value : null,
       whatsapp_number: whatsapp.value.trim() || null,
     })
@@ -90,6 +92,16 @@ async function submit() {
         <p class="hint">Incompatible program/query pairs are rejected with the applicable list — nothing is submitted.</p>
       </div>
       <p v-if="mode === 'all'" class="hint">Protein queries run blastp + tblastn; DNA queries run blastn + blastx + tblastx. Each stores its own parameters and hits for comparison.</p>
+
+      <label for="backend">Search on</label>
+      <select id="backend" v-model="searchBackend" class="select">
+        <option value="server">Server default (whatever this host is configured for)</option>
+        <option value="local">Local BLAST — this server, Swiss-Prot, private</option>
+        <option value="ncbi">Real NCBI BLAST — all programs and databases, slower</option>
+      </select>
+      <p v-if="searchBackend === 'local'" class="hint">Stays on this server; nothing is sent to NCBI. Supports blastp/blastn against Swiss-Prot; other programs are stored as failed with the reason.</p>
+      <p v-if="searchBackend === 'ncbi'" class="hint">Your sequence is sent to NCBI's public BLAST service (real API: submits paced at least 10s apart, each search polled at most once a minute, one NCBI search at a time). All five programs and remote databases work, but NCBI queues can take minutes to hours — the workflow runs in the background either way.</p>
+      <p v-if="searchBackend === 'server'" class="hint">Uses this host's configured backend. The results page always records which backend actually ran.</p>
 
       <label for="wa">WhatsApp number for the done notification (optional)</label>
       <input id="wa" v-model="whatsapp" type="text" placeholder="e.g. 60123456789 — leave blank to just watch this page">

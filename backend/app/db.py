@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     source TEXT NOT NULL DEFAULT 'whatsapp',
     workflow_mode TEXT NOT NULL DEFAULT 'auto',
     requested_program TEXT,
+    backend_choice TEXT NOT NULL DEFAULT 'server',
     notify_to TEXT,
     msa_alignment TEXT,
     tree_newick TEXT,
@@ -94,6 +95,7 @@ _JOB_COLUMNS: dict[str, str] = {
     "source": "TEXT NOT NULL DEFAULT 'whatsapp'",
     "workflow_mode": "TEXT NOT NULL DEFAULT 'auto'",
     "requested_program": "TEXT",
+    "backend_choice": "TEXT NOT NULL DEFAULT 'server'",
     "notify_to": "TEXT",
     "msa_alignment": "TEXT",
     "tree_newick": "TEXT",
@@ -144,7 +146,7 @@ def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
 def create_job(*, question: str, raw_input: str, input_kind: str = "",
                whatsapp_user_id: str | None = None, source: str = "whatsapp",
                workflow_mode: str = "auto", requested_program: str | None = None,
-               notify_to: str | None = None) -> dict[str, Any]:
+               notify_to: str | None = None, backend_choice: str = "server") -> dict[str, Any]:
     job_id = f"WG-{uuid.uuid4().hex.upper()}"
     now = _now()
     with _lock, _connect() as conn:
@@ -152,11 +154,11 @@ def create_job(*, question: str, raw_input: str, input_kind: str = "",
             """
             INSERT INTO jobs (id, created_at, updated_at, status, question,
                               input_kind, raw_input, whatsapp_status, whatsapp_user_id,
-                              source, workflow_mode, requested_program, notify_to)
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?)
+                              source, workflow_mode, requested_program, backend_choice, notify_to)
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?, ?)
             """,
             (job_id, now, now, question, input_kind, raw_input, whatsapp_user_id,
-             source, workflow_mode, requested_program, notify_to),
+             source, workflow_mode, requested_program, backend_choice, notify_to),
         )
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return _row_to_job(row)
