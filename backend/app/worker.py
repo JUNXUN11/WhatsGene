@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from . import config, db, whatsapp_client
 from .agent_loop import process_job as _run_loop
-from .search_backend import get_backend
+from .search_backend import get_backend, get_backend_for_choice
 
 _executor: ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
@@ -53,9 +53,16 @@ def notify_job_done(job: dict) -> dict:
     return result
 
 
+def backend_for_job(job: dict, explicit=None):
+    """Explicit backend wins; otherwise the workflow's stored choice."""
+    if explicit is not None:
+        return explicit
+    return get_backend_for_choice(job.get("backend_choice") or "server")
+
+
 def run_job(job: dict, backend=None) -> dict:
     """Run one queued workflow to completion, then notify."""
-    backend = backend or get_backend()
+    backend = backend_for_job(job, backend)
     try:
         if backend.name == "ncbi":
             with _ncbi_lock:  # one in-flight RID, however many workflows queue

@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import agent, chat, config, db, worker  # noqa: E402
 from app.agent_loop import process_job  # noqa: E402
 from app.blast_params import parameters_for  # noqa: E402
+from app.intent import parse_intent as parse_intent_local  # noqa: E402
 from app.rules_engine import applicable_programs, plan_programs  # noqa: E402
 from app.search_backend import Fixture  # noqa: E402
 from app import whatsapp_client  # noqa: E402
@@ -150,6 +151,34 @@ class TestParallelJobs(Base):
         self.assertIn("200000", result["reply"])
 
 
+class TestCharterCases(Base):
+    """Owner charter cases from real lab work (Lab 04 Q3 neuroglobin)."""
+
+    def test_neuroglobin_moss_hits_at_e10ish_are_not_significant(self):
+        from app.classify import classify_hit
+
+        for evalue in (9.9, 12.0, 18.0):
+            self.assertEqual(classify_hit(evalue, 88.0), "not_significant")
+
+    def test_raised_threshold_hits_never_become_a_claim(self):
+        sequence = "MVHLTPEEKSAV" * 13  # ~156 aa neuroglobin-like query
+        hits = [{
+            "accession": "XP_001764902", "organism": "Physcomitrella patens",
+            "annotation": "predicted protein", "identity": 27.0,
+            "query_start": 1, "query_end": 138, "alignment_length": 138,
+            "subject_length": 150, "bit_score": 45.0, "evalue": 12.0,
+            "sequence": "MVHLTP",
+        }]
+        backend = Fixture(primary_hits=hits, reciprocal_hits={})
+        job = db.create_job(question="Do mosses have globins?", raw_input=sequence,
+                            whatsapp_user_id="u1", source="web", workflow_mode="auto")
+        final = process_job(job, backend)
+        self.assertEqual(final["hits"][0]["classification"], "not_significant")
+        self.assertEqual(final["outcome"], "not_confirmed")
+        searches = db.get_searches(final["id"])
+        self.assertEqual(searches[0]["hits"][0]["evalue"], 12.0)
+
+
 class TestWhatsAppClient(Base):
     def test_payload_builders(self):
         text = whatsapp_client.build_text_payload(to="123", body="done")
@@ -196,3 +225,221 @@ class TestWebApi(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAccessionSubrange(Base):
+    """Lab 04 Q2: RBP4 CDS slice NM_006744.4 bases 84-689."""
+
+    def test_parse_accession_query(self):
+        from app.validate import parse_accession_query
+
+        self.assertEqual(parse_accession_query("NM_006744.4:84-689"),
+                         ("NM_006744.4", (84, 689)))
+        self.assertEqual(parse_accession_query("NP_000509"), ("NP_000509", None))
+
+    def test_workflow_searches_only_the_cds_slice(self):
+        full = "C" * 83 + "ATGAAA" + "ACGT" * 150 + "TAA"  # 692 bases
+        backend = Fixture(
+            sequences={"NM_006744.4": {"accession": "NM_006744.4", "organism": "Homo sapiens",
+                                       "annotation": "retinol binding protein 4", "sequence": full}},
+            primary_hits=[], reciprocal_hits={})
+        job = db.create_job(question="Identify this coding sequence",
+                            raw_input="NM_006744.4:84-689", source="web")
+        final = process_job(job, backend)
+        self.assertEqual(final["query_length"], 606)  # 689-84+1
+        self.assertTrue(final["sequence"].startswith("ATGAAA"))
+        self.assertEqual(final["parameters"]["subrange"],
+                         {"accession": "NM_006744.4", "start": 84, "end": 689})
+        steps = [s["step"] for s in db.get_step_log(final["id"])]
+        self.assertIn("fetch_accession", steps)
+
+
+class TestHIVExclusion(Base):
+    """Lab 04 Q4: HIV-1 pol excluding HIV-1, both backends + taxa flag."""
+
+    def test_intent_extracts_hiv1_exclusion(self):
+        intent = parse_intent_local("Is HIV-1 pol closer to HIV-2 or SIV, excluding HIV-1?")
+        self.assertEqual(intent["exclude_organism"], "Human immunodeficiency virus 1")
+
+    def test_entrez_query_builds_not_exclusion(self):
+        from app.search_backend import build_entrez_query
+
+        self.assertEqual(build_entrez_query(None, "Human immunodeficiency virus 1"),
+                         'NOT "Human immunodeficiency virus 1"[Organism]')
+        self.assertEqual(build_entrez_query("nematodes", None), '"nematodes"[Organism]')
+        self.assertEqual(build_entrez_query("viruses", "Human immunodeficiency virus 1"),
+                         '"viruses"[Organism] NOT "Human immunodeficiency virus 1"[Organism]')
+        self.assertIsNone(build_entrez_query(None, None))
+
+    def test_local_filter_excludes_taxon(self):
+        from app.search_backend import select_seqids_filtered
+
+        taxid_map = "sp|P1|HIV1\t11676\nsp|P2|ECOLI\t562\nsp|P3|HUMAN\t9606\n"
+        self.assertEqual(select_seqids_filtered(taxid_map, None, {11676}),
+                         ["sp|P2|ECOLI", "sp|P3|HUMAN"])
+        self.assertEqual(select_seqids_filtered(taxid_map, {9606}, {11676}), ["sp|P3|HUMAN"])
+
+    def test_taxa_flag_marks_bacterial_hit_only(self):
+        from app.classify import flag_unexpected_taxa
+
+        hits = [
+            {"accession": "HIV2POL", "organism": "Human immunodeficiency virus 2", "annotation": "pol protein"},
+            {"accession": "SIVPOL", "organism": "Simian immunodeficiency virus", "annotation": "pol protein"},
+            {"accession": "ECTNP", "organism": "Escherichia coli", "annotation": "transposase"},
+        ]
+        flagged = flag_unexpected_taxa(hits, query_organism="Human immunodeficiency virus 1",
+                                       query_annotation="Gag-Pol polyprotein")
+        self.assertIsNone(flagged[0]["taxa_flag"])
+        self.assertIsNone(flagged[1]["taxa_flag"])
+        self.assertEqual(flagged[2]["taxa_flag"], "unexpected_taxa")
+
+    def test_workflow_stores_exclusion_and_flags(self):
+        sequence = "MVHLTPEEKSAV" * 120  # long viral-like protein query
+        hits = [
+            {"accession": "HIV2POL", "organism": "Human immunodeficiency virus 2",
+             "annotation": "pol protein", "identity": 55.0, "query_start": 1, "query_end": 1400,
+             "alignment_length": 1400, "subject_length": 1450, "bit_score": 900.0,
+             "evalue": 0.0, "sequence": "MVHLTP"},
+            {"accession": "ECTNP", "organism": "Escherichia coli", "annotation": "transposase",
+             "identity": 30.0, "query_start": 10, "query_end": 400, "alignment_length": 390,
+             "subject_length": 420, "bit_score": 120.0, "evalue": 1e-20, "sequence": "MVHLTP"},
+        ]
+        backend = Fixture(
+            sequences={"NP_057849": {"accession": "NP_057849.4", "organism": "Human immunodeficiency virus 1",
+                                     "annotation": "Gag-Pol polyprotein", "sequence": sequence}},
+            primary_hits=hits, reciprocal_hits={})
+        job = db.create_job(question="Is HIV-1 pol closer to HIV-2 or SIV, excluding HIV-1?",
+                            raw_input="NP_057849", source="web", workflow_mode="auto")
+        final = process_job(job, backend)
+        searches = db.get_searches(final["id"])
+        self.assertEqual(searches[0]["parameters"]["exclude_organism"],
+                         "Human immunodeficiency virus 1")
+        by_acc = {h["accession"]: h for h in final["hits"]}
+        self.assertIsNone(by_acc["HIV2POL"]["taxa_flag"])
+        self.assertEqual(by_acc["ECTNP"]["taxa_flag"], "unexpected_taxa")
+        self.assertIn("flagged unexpected taxa", final["summary"])
+
+
+class TestMsaTree(Base):
+    """Tier 2: MSA (Lab 06) -> NJ tree, Poisson + complete deletion (Lab 07)."""
+
+    def test_complete_deletion_drops_gap_columns(self):
+        from app.msa import complete_deletion
+
+        records = [{"label": "a", "sequence": "ACGT"}, {"label": "b", "sequence": "A-GT"}]
+        cleaned = complete_deletion(records)
+        self.assertEqual([r["sequence"] for r in cleaned], ["AGT", "AGT"])
+
+    def test_poisson_distance(self):
+        from app.msa import poisson_distance
+
+        self.assertEqual(poisson_distance("AAAA", "AAAA"), 0.0)
+        self.assertAlmostEqual(poisson_distance("AAAA", "AATT"), 0.6931, places=3)
+
+    def test_tree_needs_three_sequences(self):
+        from app.msa import MsaError, build_tree_newick
+
+        with self.assertRaises(MsaError):
+            build_tree_newick([{"label": "a", "sequence": "AAAA"},
+                               {"label": "b", "sequence": "AAAT"}])
+
+    def test_workflow_continues_into_alignment_and_tree(self):
+        from app.msa import FixtureMsa, run_alignment
+
+        hits = [
+            {"accession": "HIT1", "organism": "C. elegans", "annotation": "globin-like protein",
+             "identity": 60.0, "query_start": 1, "query_end": 12, "alignment_length": 12,
+             "subject_length": 14, "bit_score": 40.0, "evalue": 1e-12, "sequence": SHORT_QUERY},
+            {"accession": "HIT2", "organism": "C. briggsae", "annotation": "globin-like protein",
+             "identity": 55.0, "query_start": 1, "query_end": 12, "alignment_length": 12,
+             "subject_length": 14, "bit_score": 38.0, "evalue": 1e-11, "sequence": "PNLHGLFGRKTA"},
+        ]
+        backend = Fixture(primary_hits=hits, reciprocal_hits={
+            "HIT1": [{"accession": "RECIP1", "evalue": 1e-10, "annotation": "globin",
+                      "query_start": 1, "query_end": 12, "subject_length": 14}]})
+        job = db.create_job(question="Identify this protein", raw_input=SHORT_QUERY,
+                            whatsapp_user_id="u1", source="web", workflow_mode="auto")
+        final = process_job(job, backend)
+        self.assertEqual(final["outcome"], "confirmed")
+        aligned = run_alignment(job=final, search_backend=backend, msa_backend=FixtureMsa())
+        self.assertIn("HIT1", aligned["msa_alignment"])
+        self.assertIn("HIT2", aligned["tree_newick"])
+        steps = [s["step"] for s in db.get_step_log(final["id"])]
+        self.assertIn("align", steps)
+        self.assertIn("tree", steps)
+
+
+class TestResearchMemory(Base):
+    """2 Nov (website form): a new workflow visibly links to earlier ones."""
+
+    def _run_globin(self, backend) -> dict:
+        job = db.create_job(question="Identify this protein", raw_input=SHORT_QUERY,
+                            whatsapp_user_id="mem", source="web", workflow_mode="auto")
+        return process_job(job, backend)
+
+    def test_second_run_links_to_first_by_sequence(self):
+        self._run_globin(_backend())
+        second = self._run_globin(_backend())
+        related = db.related_jobs(second)
+        self.assertEqual(len(related), 1)
+        self.assertNotEqual(related[0]["id"], second["id"])
+
+    def test_unrelated_sequence_has_no_links(self):
+        self._run_globin(_backend())
+        other = db.create_job(question="q", raw_input="ACGTACGTACGTACGTACGT",
+                              whatsapp_user_id="mem", source="web")
+        other = process_job(other, Fixture(primary_hits=[], reciprocal_hits={}))
+        self.assertEqual(db.related_jobs(other), [])
+
+
+class TestBackendChoice(Base):
+    """Per-workflow backend switch: local server vs real NCBI API."""
+
+    def test_normalize_and_pacing_helpers(self):
+        from app.search_backend import (SearchError, ncbi_submit_wait_seconds,
+                                        normalize_backend_choice)
+
+        self.assertEqual(normalize_backend_choice(None), "server")
+        self.assertEqual(normalize_backend_choice("NCBI"), "ncbi")
+        self.assertEqual(normalize_backend_choice("default"), "server")
+        with self.assertRaises(SearchError):
+            normalize_backend_choice("bogus")
+        self.assertEqual(ncbi_submit_wait_seconds(last_submit_at=None, now=100.0), 0.0)
+        self.assertEqual(ncbi_submit_wait_seconds(last_submit_at=100.0, now=104.0), 6.0)
+        self.assertEqual(ncbi_submit_wait_seconds(last_submit_at=100.0, now=115.0), 0.0)
+
+    def test_server_choice_keeps_configured_fixture(self):
+        from app import worker
+
+        job = db.create_job(question="q", raw_input=SHORT_QUERY, source="web")
+        self.assertEqual(job["backend_choice"], "server")
+        old = config.SEARCH_BACKEND
+        config.SEARCH_BACKEND = "fixture"
+        try:
+            self.assertEqual(worker.backend_for_job(job).name, "fixture")
+        finally:
+            config.SEARCH_BACKEND = old
+
+    def test_choice_is_stored_on_the_job(self):
+        job = db.create_job(question="q", raw_input=SHORT_QUERY, source="web",
+                            backend_choice="ncbi")
+        self.assertEqual(job["backend_choice"], "ncbi")
+        self.assertEqual((db.get_job(job["id"]) or {})["backend_choice"], "ncbi")
+
+    def test_api_stores_user_backend_choice(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        old_backend = config.SEARCH_BACKEND
+        config.SEARCH_BACKEND = "fixture"
+        try:
+            with TestClient(app) as client:
+                created = client.post("/jobs", json={
+                    "sequence": SHORT_QUERY, "question": "parameters?",
+                    "workflow_mode": "single", "program": "blastp",
+                    "search_backend": "server"})
+                self.assertEqual(created.status_code, 201)
+                self.assertEqual(created.json()["backend_choice"], "server")
+        finally:
+            config.SEARCH_BACKEND = old_backend

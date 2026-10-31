@@ -4,6 +4,7 @@ export interface JobCreateOptions {
   workflow_mode?: 'auto' | 'single' | 'all'
   program?: string | null
   whatsapp_number?: string | null
+  search_backend?: 'server' | 'local' | 'ncbi'
 }
 
 export function useApi() {
@@ -16,6 +17,7 @@ export function useApi() {
       body: {
         sequence, question,
         workflow_mode: options.workflow_mode || 'auto',
+        search_backend: options.search_backend || 'server',
         program: options.program || null,
         whatsapp_number: options.whatsapp_number || null,
         source: 'web',
@@ -35,6 +37,10 @@ export function useApi() {
     return await $fetch<Job>(`${base}/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
   }
 
+  async function alignJob(id: string): Promise<Job> {
+    return await $fetch<Job>(`${base}/jobs/${encodeURIComponent(id)}/align`, { method: 'POST' })
+  }
+
   async function askJob(id: string, question: string): Promise<string> {
     const res = await $fetch<{ answer: string }>(`${base}/jobs/${encodeURIComponent(id)}/ask`, {
       method: 'POST', body: { question },
@@ -42,5 +48,5 @@ export function useApi() {
     return res.answer
   }
 
-  return { createJob, getJob, listJobs, cancelJob, askJob, base }
+  return { createJob, getJob, listJobs, cancelJob, askJob, alignJob, base }
 }

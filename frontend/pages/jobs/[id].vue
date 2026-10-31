@@ -2,13 +2,15 @@
 import type { Job } from '~/types/job'
 
 const route = useRoute()
-const { getJob, cancelJob, askJob } = useApi()
+const { getJob, cancelJob, askJob, alignJob } = useApi()
 
 const job = ref<Job | null>(null)
 const error = ref('')
 const askText = ref('')
 const answer = ref('')
 const asking = ref(false)
+const aligning = ref(false)
+const alignError = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
 
 async function load() {
@@ -63,6 +65,20 @@ async function ask() {
   }
 }
 
+async function align() {
+  if (!job.value) return
+  aligning.value = true
+  alignError.value = ''
+  try {
+    job.value = await alignJob(job.value.id)
+  } catch (e: unknown) {
+    const err = e as { data?: { detail?: string }; message?: string }
+    alignError.value = err.data?.detail || err.message || 'Alignment failed.'
+  } finally {
+    aligning.value = false
+  }
+}
+
 const suggestions = [
   'What is the E-value cutoff?',
   'What is the word size?',
@@ -96,6 +112,7 @@ const suggestions = [
       <div class="card">
         <h2 style="margin-top: 0;">Search</h2>
         <dl class="meta">
+          <dt>Search backend</dt><dd>{{ job.parameters?.backend || job.backend_choice || '—' }}<span v-if="job.backend_choice"> (chosen: {{ job.backend_choice }})</span></dd>
           <dt>Program</dt><dd>{{ job.program || '—' }}</dd>
           <dt>Database</dt><dd>{{ job.database || '—' }}</dd>
           <dt>Detected type</dt><dd>{{ job.detected_type || '—' }}<span v-if="job.query_length"> · {{ job.query_length }} residues</span></dd>
@@ -143,7 +160,7 @@ const suggestions = [
         <h2>Hits (primary search)</h2>
         <table class="hits">
           <thead>
-            <tr><th>Accession</th><th>Organism</th><th>Identity</th><th>Coverage</th><th>Bit score</th><th>E-value</th><th>Class</th></tr>
+            <tr><th>Accession</th><th>Organism</th><th>Identity</th><th>Coverage</th><th>Bit score</th><th>E-value</th><th>Class</th><th>Taxa flag</th></tr>
           </thead>
           <tbody>
             <tr v-for="hit in job.hits" :key="hit.accession">
@@ -154,6 +171,7 @@ const suggestions = [
               <td>{{ fmt(hit.bit_score) }}</td>
               <td>{{ fmt(hit.evalue) }}</td>
               <td :class="`class-${hit.classification}`">{{ hit.classification || '—' }}</td>
+              <td><span v-if="hit.taxa_flag" class="class-borderline">{{ hit.taxa_flag }}</span><span v-else>—</span></td>
             </tr>
           </tbody>
         </table>
@@ -163,6 +181,28 @@ const suggestions = [
       <template v-if="job.summary">
         <h2>Summary</h2>
         <div class="card" style="background: #fff;">{{ job.summary }}</div>
+      </template>
+
+      <template v-if="job.related_jobs && job.related_jobs.length">
+        <h2>Related earlier workflows</h2>
+        <p style="font-size: 14px; color: var(--muted);">Same accession or same sequence as an earlier run — your research trail, stored server-side.</p>
+        <div v-for="r in job.related_jobs" :key="r.id" class="card" style="margin: 8px 0; padding: 12px 16px;">
+          <NuxtLink :to="`/jobs/${r.id}`" style="font-weight: 600; text-decoration: none;">{{ r.id }}</NuxtLink>
+          <span class="status-pill" :class="`status-${r.status}`" style="margin-left: 8px;">{{ r.status }}</span>
+          <span style="font-size: 13px; color: var(--muted);"> {{ r.program || '' }} · {{ r.outcome || '' }}<span v-if="r.question"> · “{{ r.question }}”</span></span>
+        </div>
+      </template>
+
+      <h2>Alignment and tree (Tier 2)</h2>
+      <p style="font-size: 14px; color: var(--muted);">From the confirmed homologs of this workflow: MAFFT alignment (Lab 06), then a neighbor-joining tree with Poisson-corrected distances after complete deletion of gap columns (Lab 07). No bootstrapping — that stays roadmap-only.</p>
+      <button v-if="job.status === 'done' && !job.msa_alignment" class="btn" :disabled="aligning" @click="align">{{ aligning ? 'Aligning…' : 'Build MSA + tree' }}</button>
+      <p v-if="alignError" class="error">{{ alignError }}</p>
+      <template v-if="job.msa_alignment">
+        <p style="font-size: 14px;"><strong>Homologs:</strong> {{ (job.homologs || []).map(h => String(h.label)).join(', ') }}</p>
+        <h3>Multiple sequence alignment</h3>
+        <pre class="seqblock">{{ job.msa_alignment }}</pre>
+        <h3>Neighbor-joining tree (Newick)</h3>
+        <pre class="seqblock">{{ job.tree_newick }}</pre>
       </template>
 
       <h2>Ask about this workflow</h2>
@@ -201,3 +241,15 @@ const suggestions = [
     </template>
   </main>
 </template>
+
+<style scoped>
+.seqblock {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+</style>

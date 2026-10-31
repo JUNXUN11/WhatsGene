@@ -50,6 +50,7 @@ class JobCreate(BaseModel):
     sequence: str = Field(description="FASTA text, raw sequence, or NCBI accession (e.g. NP_000509)")
     question: str = Field(default="", description="Plain-language question, e.g. 'Is there a related gene in nematodes?'")
     workflow_mode: str = Field(default="auto", description="auto | single | all")
+    search_backend: str = Field(default="server", description="server | local | ncbi — where this workflow searches")
     program: str | None = Field(default=None, description="Program for workflow_mode=single, e.g. blastp")
     whatsapp_number: str | None = Field(default=None, description="Optional WhatsApp number for the done notification")
     source: str = Field(default="web")
@@ -62,6 +63,26 @@ class AskBody(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "whatsgene-backend"}
+
+
+@app.get("/privacy")
+def privacy() -> dict:
+    """Public privacy policy (Meta app publishing requirement)."""
+    return {
+        "service": "WhatsGene",
+        "summary": (
+            "WhatsGene is a research and education tool, not medical advice. "
+            "We store your submitted sequence/accession, question, search parameters "
+            "(program, database, E-value threshold, word size, matrix), parsed hits, "
+            "and step log so results can be shown and follow-up questions answered "
+            "from stored values. Your WhatsApp number is stored server-side only as "
+            "your job-history key and is never shown on results pages. Local searches "
+            "run on our server; remote searches send the sequence to NCBI's public "
+            "BLAST service. Message 'forget my history' on WhatsApp at any time to "
+            "delete your stored job history."
+        ),
+        "contact": "junxun288@gmail.com",
+    }
 
 
 @app.post("/jobs", status_code=201)
@@ -77,9 +98,9 @@ def create_job(body: JobCreate) -> dict:
     job = db.create_job(question=body.question or "", raw_input=raw,
                         whatsapp_user_id=notify, source=body.source or "web",
                         workflow_mode=mode, requested_program=body.program,
-                        notify_to=notify)
+                        notify_to=notify, backend_choice=(body.search_backend or "server"))
     try:
-        backend = get_backend()
+        backend = worker.backend_for_job(job)
     except SearchError as exc:
         # Queue anyway only if a worker could succeed later; surface config
         # errors now so the user is not left waiting on a dead workflow.
@@ -103,6 +124,27 @@ def get_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
     return _public_job(job)
+
+
+@app.post("/jobs/{job_id}/align")
+def align_job(job_id: str) -> dict:
+    """Tier 2: MSA + neighbor-joining tree from confirmed homologs."""
+    from .msa import MsaError, run_alignment
+
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail="Alignment needs a finished workflow.")
+    try:
+        backend = get_backend()
+    except SearchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        final = run_alignment(job=job, search_backend=backend)
+    except MsaError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _public_job(final)
 
 
 @app.post("/jobs/{job_id}/cancel")
@@ -133,6 +175,11 @@ def _public_job(job: dict) -> dict:
     public = {k: v for k, v in job.items() if k not in ("whatsapp_user_id", "notify_to")}
     public["step_log"] = db.get_step_log(job["id"])
     public["searches"] = db.get_searches(job["id"])
+    public["related_jobs"] = [
+        {"id": r["id"], "question": r.get("question"), "status": r.get("status"),
+         "outcome": r.get("outcome"), "program": r.get("program"),
+         "created_at": r.get("created_at")}
+        for r in db.related_jobs(job)]
     public["notify_configured"] = bool(job.get("notify_to") or job.get("whatsapp_user_id"))
     public["results_url"] = f"{config.FRONTEND_BASE_URL}/jobs/{job['id']}"
     backend_name = (job.get("parameters") or {}).get("backend", "ncbi")
@@ -164,6 +211,16 @@ def whatsapp_verify(request: Request) -> object:
 @app.post("/webhooks/whatsapp")
 async def whatsapp_inbound(request: Request) -> dict:
     payload = await request.json()
+    # TEMP DEBUG (delivery diagnosis): record every webhook payload,
+    # including message statuses with Meta's failure reasons.
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+
+        with _Path("/tmp/whatsgene-webhooks.log").open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(payload) + "\n")
+    except Exception:
+        pass
     replies: list[dict] = []
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):

@@ -7,6 +7,7 @@ const question = ref('')
 const mode = ref<'auto' | 'single' | 'all'>('auto')
 const program = ref('blastp')
 const whatsapp = ref('')
+const searchBackend = ref<'server' | 'local' | 'ncbi'>('server')
 const busy = ref(false)
 const error = ref('')
 
@@ -32,6 +33,7 @@ async function submit() {
   try {
     const job = await createJob(sequence.value.trim(), question.value.trim(), {
       workflow_mode: mode.value,
+      search_backend: searchBackend.value,
       program: mode.value === 'single' ? program.value : null,
       whatsapp_number: whatsapp.value.trim() || null,
     })
@@ -47,13 +49,19 @@ async function submit() {
 
 <template>
   <main class="page">
-    <h1>BLAST for people who don't use BLAST every day</h1>
+    <p style="font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); font-weight: 700; margin: 0 0 8px;">WhatsGene — BLAST workflows</p>
+    <h1>Run BLAST in parallel. Read a verified answer, not a hit list.</h1>
     <p class="lede">
-      Paste a short query here. WhatsGene turns it into a background workflow: the rules
-      engine picks the BLAST program (or runs every program that fits your query), stores
-      every result with its exact E-value cutoff, word size and matrix, and WhatsApps you
-      when it is done. Ask questions about the stored results here or on WhatsApp — answers
-      quote stored values only.
+      For people who don't use BLAST every day. Paste a sequence or accession below:
+      WhatsGene queues a background workflow, picks the BLAST program with fixed rules
+      (or runs every program that fits your query), searches in parallel, classifies and
+      reciprocal-checks hits in code, and replies with the context — why this program,
+      the exact E-value cutoff, word size and matrix, the top hit, and how confident
+      you can be. Queue five searches in a minute; watch each one's status here.
+    </p>
+    <p style="font-size: 14px; color: var(--muted); margin: 0 0 8px;">
+      Status you will see: <strong>queued → running → done</strong> (or failed / cancelled) ·
+      every search stores its parameters and hits · ask follow-ups in the Ask box — answers quote stored values only.
     </p>
 
     <form class="card" @submit.prevent="submit">
@@ -85,9 +93,19 @@ async function submit() {
       </div>
       <p v-if="mode === 'all'" class="hint">Protein queries run blastp + tblastn; DNA queries run blastn + blastx + tblastx. Each stores its own parameters and hits for comparison.</p>
 
+      <label for="backend">Search on</label>
+      <select id="backend" v-model="searchBackend" class="select">
+        <option value="server">Server default (whatever this host is configured for)</option>
+        <option value="local">Local BLAST — this server, Swiss-Prot, private</option>
+        <option value="ncbi">Real NCBI BLAST — all programs and databases, slower</option>
+      </select>
+      <p v-if="searchBackend === 'local'" class="hint">Stays on this server; nothing is sent to NCBI. Supports blastp/blastn against Swiss-Prot; other programs are stored as failed with the reason.</p>
+      <p v-if="searchBackend === 'ncbi'" class="hint">Your sequence is sent to NCBI's public BLAST service (real API: submits paced at least 10s apart, each search polled at most once a minute, one NCBI search at a time). All five programs and remote databases work, but NCBI queues can take minutes to hours — the workflow runs in the background either way.</p>
+      <p v-if="searchBackend === 'server'" class="hint">Uses this host's configured backend. The results page always records which backend actually ran.</p>
+
       <label for="wa">WhatsApp number for the done notification (optional)</label>
       <input id="wa" v-model="whatsapp" type="text" placeholder="e.g. 60123456789 — leave blank to just watch this page">
-      <p class="hint">Stored server-side only, never shown on results pages. You can also start and ask questions entirely on WhatsApp.</p>
+      <p class="hint">Stored server-side only, never shown on results pages. WhatsApp delivery is currently deferred (Meta business verification), so watch the workflows page for status today.</p>
 
       <button class="btn" type="submit" :disabled="busy">{{ busy ? 'Queueing…' : 'Queue workflow' }}</button>
       <p v-if="error" class="error">{{ error }}</p>
@@ -109,11 +127,22 @@ async function submit() {
       decision is logged with its reason.
     </p>
 
-    <h2>Start on WhatsApp instead</h2>
+    <h2>WhatsApp — coming back later</h2>
     <p>
-      Message the WhatsGene WhatsApp number with a sequence or accession and your question.
-      Many workflows can run at once in one chat; each finish is WhatsApped back with a link.
-      Follow-ups such as “What was the E-value cutoff for WG-…?” are answered from stored results.
+      WhatsApp start-and-notify is built and its inbound path is proven, but Meta currently
+      blocks our outbound replies until the business account is verified. So the website is
+      the way in for now: submit, track, and ask here. When the website work is complete we
+      retry WhatsApp; if it still cannot deliver, Telegram becomes the notification fallback.
+      Nothing about your searches changes either way.
+    </p>
+
+    <h2>About this service</h2>
+    <p style="font-size: 14px; color: var(--muted);">
+      WhatsGene is a research and education tool run by Too Jun Xun (Malaysia) — not medical
+      advice. Contact: junxun288@gmail.com. Your submitted sequence, question, search
+      parameters and results are stored so your workflows and follow-up answers can be shown;
+      local searches run on our server, and only remote (NCBI) searches send a sequence to
+      NCBI's public BLAST service. Full policy: ask for the privacy link on the results page footer.
     </p>
   </main>
 </template>

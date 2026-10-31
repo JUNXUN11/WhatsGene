@@ -17,8 +17,8 @@ from typing import Callable
 from . import agent, config, db, rules_engine
 from .blast_params import parameters_for
 from .search_backend import SearchBackend, SearchError
-from .classify import classify_hits
-from .validate import ValidationError, detect_type, looks_like_accession, normalise_sequence
+from .classify import classify_hits, flag_unexpected_taxa
+from .validate import ValidationError, detect_type, looks_like_accession, normalise_sequence, parse_accession_query
 from .verify import coverage_from_coordinates, verify_candidate
 
 Milestone = Callable[[dict, str], None]
@@ -71,8 +71,9 @@ def process_job(job: dict, backend: SearchBackend,
     accession: str | None = None
     query_annotation = ""
     query_organism: str | None = None
-    if looks_like_accession(raw):
-        accession = raw.upper()
+    accession_candidate, subrange = parse_accession_query(raw)
+    if looks_like_accession(accession_candidate):
+        accession = accession_candidate.upper()
         try:
             record = backend.fetch_by_accession(accession)
         except SearchError as exc:
@@ -81,6 +82,20 @@ def process_job(job: dict, backend: SearchBackend,
             return db.update_job(job_id, status="failed", input_kind="accession",
                                  accession=accession, error=str(exc)) or job
         sequence = (record.get("sequence") or "").upper()
+        if subrange is not None:
+            start, end = subrange
+            if not (1 <= start <= end <= len(sequence)):
+                _log(job_id, step="fetch_accession", observation=f"{accession}:{start}-{end}",
+                     decision="fail job",
+                     reason=f"Subrange {start}-{end} is outside the fetched sequence (length {len(sequence)}).")
+                return db.update_job(job_id, status="failed", input_kind="accession",
+                                     accession=accession,
+                                     error=f"Subrange {start}-{end} is outside {accession} (length {len(sequence)}).") or job
+            sequence = sequence[start - 1:end]
+            _log(job_id, step="fetch_accession",
+                 observation=f"{accession} bases {start}-{end} -> {len(sequence)} bases (CDS slice)",
+                 decision="use subrange sequence",
+                 reason="Accession subrange applied in code (Lab 04 Q2 CDS pattern, blast-rules §11).")
         query_annotation = record.get("annotation", "") or record.get("organism", "")
         query_organism = (record.get("organism") or "").strip() or None
         organism_match = re.search(r"\[([^\]]+)\]\s*$", query_annotation)
@@ -147,12 +162,15 @@ def process_job(job: dict, backend: SearchBackend,
     def params_for_spec(spec: dict, kind: str) -> dict:
         base = parameters_for(program=spec["program"], detected_type=detected,
                               query_length=len(sequence),
-                              organism_filter=spec.get("organism_filter"))
+                              organism_filter=spec.get("organism_filter"),
+                              exclude_organism=spec.get("exclude_organism"))
         return {"backend": backend.name, **base, "kind": kind,
                 "rationale": spec["reason"], "rule": spec["rule"],
                 "deviation_applied": applied_deviation}
 
     primary_params = params_for_spec(choice, "primary")
+    if subrange is not None and accession:
+        primary_params["subrange"] = {"accession": accession, "start": subrange[0], "end": subrange[1]}
     if primary_params.get("short_query_adjusted"):
         _log(job_id, step="short_query",
              observation=f"{choice['program']} query length {len(sequence)}",
@@ -213,7 +231,9 @@ def process_job(job: dict, backend: SearchBackend,
             _log(job_id, step="poll", observation=f"RID {rid}", decision="fail search", reason=str(exc))
             last_error = str(exc)
             return None
-        hits = classify_hits(_with_coverage(raw_hits, len(sequence)))
+        hits = flag_unexpected_taxa(
+            classify_hits(_with_coverage(raw_hits, len(sequence))),
+            query_organism=query_organism or "", query_annotation=query_annotation)
         db.complete_search(search_id, hits=hits, status="done")
         successful_searches += 1
         counts: dict[str, int] = {}

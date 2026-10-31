@@ -23,6 +23,7 @@ export interface Hit {
   bit_score?: number
   evalue?: number
   classification?: Classification
+  taxa_flag?: string | null
 }
 
 export interface SearchResult {
@@ -44,6 +45,7 @@ export interface Job {
   input_kind: string
   source?: string
   workflow_mode?: string
+  backend_choice?: string
   requested_program?: string | null
   accession?: string | null
   detected_type?: string
@@ -60,6 +62,10 @@ export interface Job {
   intent?: Record<string, unknown>
   searches_used?: number
   step_log?: StepLogEntry[]
+  related_jobs?: Array<{ id: string; question?: string; status?: string; outcome?: string | null; program?: string | null; created_at?: string }>
+  msa_alignment?: string | null
+  tree_newick?: string | null
+  homologs?: Array<Record<string, unknown>>
   whatsapp_status?: string
   notified_at?: string | null
   notify_configured?: boolean

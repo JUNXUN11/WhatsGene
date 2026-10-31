@@ -225,6 +225,48 @@ def local_seqids_for_organism(organism: str, db_dir: Path) -> list[str]:
     return seqids
 
 
+def select_seqids_filtered(map_text: str, include_taxids: set[int] | None,
+                           exclude_taxids: set[int]) -> list[str]:
+    """Seqids in include_taxids (all if None) minus exclude_taxids. Pure."""
+    seqids: list[str] = []
+    for line in map_text.splitlines():
+        seqid, _, taxid = line.partition("\t")
+        try:
+            tax = int(taxid.strip())
+        except ValueError:
+            continue
+        if include_taxids is not None and tax not in include_taxids:
+            continue
+        if tax in exclude_taxids:
+            continue
+        seqids.append(seqid.strip())
+    return seqids
+
+
+def local_seqids_filtered(db_dir: Path, *, include_organism: str | None = None,
+                          exclude_organism: str | None = None) -> list[str]:
+    """Local seqids for an inclusion and/or exclusion organism scope."""
+    missing = [name for name in _TAXONOMY_FILES if not (db_dir / name).is_file()]
+    if missing:
+        raise SearchError(
+            f"Local taxonomy files missing in {db_dir}: {', '.join(missing)}. "
+            "Stage names.dmp + nodes.dmp (NCBI taxdmp.zip) and the "
+            "sprot.taxidmap used at makeblastdb time next to the database.")
+    names = parse_names_dmp((db_dir / "names.dmp").read_text(encoding="utf-8"))
+    children = parse_nodes_dmp((db_dir / "nodes.dmp").read_text(encoding="utf-8"))
+    include = (expand_taxid(resolve_organism_taxid(include_organism, names), children)
+               if include_organism else None)
+    exclude = (expand_taxid(resolve_organism_taxid(exclude_organism, names), children)
+               if exclude_organism else set())
+    seqids = select_seqids_filtered(
+        (db_dir / "sprot.taxidmap").read_text(encoding="utf-8"), include, exclude)
+    if not seqids:
+        raise SearchError(
+            "No local swissprot sequence matches this organism scope "
+            f"(include={include_organism!r}, exclude={exclude_organism!r}).")
+    return seqids
+
+
 def parse_blastdbcmd_fasta(text: str) -> dict:
     """Parse `blastdbcmd -outfmt %f` output into an accession record. Pure."""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -311,9 +353,12 @@ class LocalBlast:
             query_fasta.write_text(f">query\n{sequence}\n", encoding="utf-8")
             seqidlist_path = None
             organism_filter = parameters.get("organism_filter")
-            if organism_filter:
-                seqids = local_seqids_for_organism(
-                    str(organism_filter), self._db_dir)
+            exclude_organism = parameters.get("exclude_organism")
+            if organism_filter or exclude_organism:
+                seqids = local_seqids_filtered(
+                    self._db_dir,
+                    include_organism=str(organism_filter) if organism_filter else None,
+                    exclude_organism=str(exclude_organism) if exclude_organism else None)
                 seqidlist_path = Path(tmp) / "seqidlist.txt"
                 seqidlist_path.write_text("\n".join(seqids) + "\n", encoding="utf-8")
             cmd = build_blast_command(
@@ -395,6 +440,23 @@ def map_search_status(text: str) -> str:
     return "waiting"
 
 
+def build_entrez_query(organism_filter: str | None,
+                       exclude_organism: str | None = None) -> str | None:
+    """Build the NCBI Entrez organism query. Pure.
+
+    Inclusion: "X"[Organism]. Exclusion (Lab 04 Q4 hint):
+    NOT "HIV-1"[Organism]. Both combine with NOT.
+    """
+    parts = []
+    if organism_filter:
+        parts.append(f'"{organism_filter}"[Organism]')
+    query = " ".join(parts) if parts else None
+    if exclude_organism:
+        exclusion = f'NOT "{exclude_organism}"[Organism]'
+        query = f"{query} {exclusion}" if query else exclusion
+    return query
+
+
 class InflightGuard:
     """At most one in-flight NCBI search per backend instance."""
 
@@ -435,6 +497,9 @@ class NcbiRemote:
     """
 
     name = "ncbi"
+
+    _submit_lock = __import__('threading').Lock()
+    _last_submit_at: float | None = None
 
     def __init__(self) -> None:
         from . import config
@@ -490,6 +555,14 @@ class NcbiRemote:
         if getattr(self, "_guard", None) is None:
             self._guard = InflightGuard()
         self._guard.check_free()  # refuse before any NCBI request
+        import time as _time
+
+        with NcbiRemote._submit_lock:
+            wait = ncbi_submit_wait_seconds(
+                last_submit_at=NcbiRemote._last_submit_at, now=_time.monotonic())
+            if wait:
+                _time.sleep(wait)
+            NcbiRemote._last_submit_at = _time.monotonic()
         ncbi_db = _DB_MAP.get(database, database)
         data = {
             "CMD": "Put",
@@ -499,9 +572,10 @@ class NcbiRemote:
             "EMAIL": config.NCBI_EMAIL,
             "TOOL": config.NCBI_TOOL,
         }
-        organism = parameters.get("organism_filter")
-        if organism:
-            data["ENTREZ_QUERY"] = f'"{organism}"[Organism]'
+        entrez = build_entrez_query(parameters.get("organism_filter"),
+                                    parameters.get("exclude_organism"))
+        if entrez:
+            data["ENTREZ_QUERY"] = entrez
         if parameters.get("evalue_threshold") is not None:
             data["EXPECT"] = str(parameters["evalue_threshold"])
         if parameters.get("word_size") is not None:
@@ -633,6 +707,45 @@ class Fixture:
             candidate = sub["parameters"].get("candidate_accession", "")
             return [dict(h) for h in self._reciprocal.get(candidate, [])]
         return [dict(h) for h in self._primary]
+
+
+_BACKEND_CHOICES = ("server", "local", "ncbi", "fixture")
+
+
+def normalize_backend_choice(choice: str | None) -> str:
+    """Normalise a per-workflow backend choice. Pure."""
+    value = (choice or "server").strip().lower()
+    if value in ("default", ""):
+        value = "server"
+    if value not in _BACKEND_CHOICES:
+        raise SearchError(
+            f"Unknown search backend {choice!r}. Use server, local, ncbi, or fixture.")
+    return value
+
+
+def get_backend_for_choice(choice: str | None) -> SearchBackend:
+    """Build the backend for one workflow's choice.
+
+    "server" keeps the configured SEARCH_BACKEND; local/ncbi/fixture
+    override it for this workflow only.
+    """
+    from . import config
+
+    value = normalize_backend_choice(choice)
+    if value == "server":
+        return get_backend()
+    if value == "local":
+        return LocalBlast()
+    if value == "ncbi":
+        return NcbiRemote()
+    return Fixture(config.FIXTURE_CASE or None)
+
+
+def ncbi_submit_wait_seconds(*, last_submit_at: float | None, now: float) -> float:
+    """Seconds to wait so NCBI submits are >= 10s apart (charter). Pure."""
+    if last_submit_at is None:
+        return 0.0
+    return max(0.0, 10.0 - (now - last_submit_at))
 
 
 def get_backend() -> SearchBackend:

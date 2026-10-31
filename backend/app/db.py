@@ -51,7 +51,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     source TEXT NOT NULL DEFAULT 'whatsapp',
     workflow_mode TEXT NOT NULL DEFAULT 'auto',
     requested_program TEXT,
-    notify_to TEXT
+    backend_choice TEXT NOT NULL DEFAULT 'server',
+    notify_to TEXT,
+    msa_alignment TEXT,
+    tree_newick TEXT,
+    homologs TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS searches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +95,11 @@ _JOB_COLUMNS: dict[str, str] = {
     "source": "TEXT NOT NULL DEFAULT 'whatsapp'",
     "workflow_mode": "TEXT NOT NULL DEFAULT 'auto'",
     "requested_program": "TEXT",
+    "backend_choice": "TEXT NOT NULL DEFAULT 'server'",
     "notify_to": "TEXT",
+    "msa_alignment": "TEXT",
+    "tree_newick": "TEXT",
+    "homologs": "TEXT NOT NULL DEFAULT '[]'",
 }
 _SEARCH_COLUMNS: dict[str, str] = {
     "hits": "TEXT NOT NULL DEFAULT '[]'",
@@ -127,7 +135,7 @@ def init_db() -> None:
 
 def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
     job = dict(row)
-    for key, default in (("parameters", {}), ("hits", []), ("intent", {})):
+    for key, default in (("parameters", {}), ("hits", []), ("intent", {}), ("homologs", [])):
         try:
             job[key] = json.loads(job.get(key) or json.dumps(default))
         except (json.JSONDecodeError, TypeError):
@@ -138,7 +146,7 @@ def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
 def create_job(*, question: str, raw_input: str, input_kind: str = "",
                whatsapp_user_id: str | None = None, source: str = "whatsapp",
                workflow_mode: str = "auto", requested_program: str | None = None,
-               notify_to: str | None = None) -> dict[str, Any]:
+               notify_to: str | None = None, backend_choice: str = "server") -> dict[str, Any]:
     job_id = f"WG-{uuid.uuid4().hex.upper()}"
     now = _now()
     with _lock, _connect() as conn:
@@ -146,11 +154,11 @@ def create_job(*, question: str, raw_input: str, input_kind: str = "",
             """
             INSERT INTO jobs (id, created_at, updated_at, status, question,
                               input_kind, raw_input, whatsapp_status, whatsapp_user_id,
-                              source, workflow_mode, requested_program, notify_to)
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?)
+                              source, workflow_mode, requested_program, backend_choice, notify_to)
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?, ?)
             """,
             (job_id, now, now, question, input_kind, raw_input, whatsapp_user_id,
-             source, workflow_mode, requested_program, notify_to),
+             source, workflow_mode, requested_program, backend_choice, notify_to),
         )
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return _row_to_job(row)
@@ -173,7 +181,7 @@ def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
 def update_job(job_id: str, **fields: Any) -> dict[str, Any] | None:
     if not fields:
         return get_job(job_id)
-    for key in ("parameters", "hits", "intent"):
+    for key in ("parameters", "hits", "intent", "homologs"):
         if key in fields and not isinstance(fields[key], str):
             fields[key] = json.dumps(fields[key])
     fields["updated_at"] = _now()
@@ -270,6 +278,28 @@ def claim_job(job_id: str) -> bool:
             "UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",
             (_now(), job_id))
     return cur.rowcount == 1
+
+
+def related_jobs(job: dict, limit: int = 5) -> list[dict[str, Any]]:
+    """Earlier workflows related by accession or identical sequence.
+
+    Deterministic relevance (PRD Open question #5, website form): same
+    resolved accession, or the same normalised sequence. Newest first.
+    """
+    clauses, params = [], []
+    if job.get("accession"):
+        clauses.append("accession = ?")
+        params.append(job["accession"])
+    if job.get("sequence"):
+        clauses.append("sequence = ?")
+        params.append(job["sequence"])
+    if not clauses:
+        return []
+    sql = ("SELECT * FROM jobs WHERE id != ? AND (" + " OR ".join(clauses) +
+           ") ORDER BY created_at DESC LIMIT ?")
+    with _connect() as conn:
+        rows = conn.execute(sql, (job["id"], *params, limit)).fetchall()
+    return [_row_to_job(r) for r in rows]
 
 
 def list_jobs_for_user(whatsapp_user_id: str, limit: int = 50) -> list[dict[str, Any]]:

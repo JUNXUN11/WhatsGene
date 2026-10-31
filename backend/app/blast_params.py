@@ -26,7 +26,8 @@ def is_short_query(*, detected_type: str, query_length: int) -> bool:
 
 
 def parameters_for(*, program: str, detected_type: str, query_length: int,
-                   organism_filter: str | None = None) -> dict:
+                   organism_filter: str | None = None,
+                   exclude_organism: str | None = None) -> dict:
     """Return the exact parameters submitted for one search."""
     short = program == "blastp" and is_short_query(
         detected_type=detected_type, query_length=query_length)
@@ -39,6 +40,7 @@ def parameters_for(*, program: str, detected_type: str, query_length: int,
     params.update({
         "program": program,
         "organism_filter": organism_filter,
+        "exclude_organism": exclude_organism,
         "filtering": "default",
         "max_target_sequences": 500,
         "short_query_adjusted": short,

@@ -38,3 +38,32 @@ def classify_hits(hits: list[dict]) -> list[dict]:
         )
         out.append(labelled)
     return out
+
+
+_VIRAL_TERMS = ("virus", "hiv", "siv", "lentivirus", "viral")
+_BACTERIAL_HINTS = ("bacteria", "bacterial", "transposase", "escherichia",
+                    "salmonella", "bacillus", "staphylococcus", "pseudomonas",
+                    "mycobacterium", "streptomyces", "cyanobacter", "clostridium")
+
+
+def flag_unexpected_taxa(hits: list[dict], *, query_organism: str = "",
+                         query_annotation: str = "") -> list[dict]:
+    """Add taxa_flag='unexpected_taxa' to bacterial hits on viral queries.
+
+    A flag only — never a rejection. Fires when the query is viral (HIV/SIV)
+    and a hit looks bacterial (e.g. bacterial transposase on an HIV-1 pol
+    search, Lab 04 Q4). Non-viral queries are untouched.
+    """
+    query_text = f"{query_organism} {query_annotation}".lower()
+    if not any(term in query_text for term in _VIRAL_TERMS):
+        return hits
+    out = []
+    for hit in hits:
+        entry = dict(hit)
+        hit_text = f"{entry.get('organism', '')} {entry.get('annotation', '')}".lower()
+        entry["taxa_flag"] = ("unexpected_taxa"
+                              if any(h in hit_text for h in _BACTERIAL_HINTS)
+                              and not any(v in hit_text for v in _VIRAL_TERMS)
+                              else None)
+        out.append(entry)
+    return out

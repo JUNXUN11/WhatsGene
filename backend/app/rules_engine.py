@@ -52,13 +52,13 @@ def plan_programs(*, intent: dict, detected_type: str, mode: str = "auto",
                 f"detected as {detected_type}. Applicable programs: {', '.join(applicable_programs(detected_type))}.")
         target = intent.get("target_organism")
         return [{"program": program, "database": database_for_program(program),
-                 "organism_filter": target,
+                 "organism_filter": target, "exclude_organism": intent.get("exclude_organism"),
                  "reason": f"User selected {program} for this {detected_type} query.",
                  "rule": "blast-rules §3: user-selected program, validated in code"}]
     if mode == "all":
         target = intent.get("target_organism")
         return [{"program": p, "database": database_for_program(p),
-                 "organism_filter": target,
+                 "organism_filter": target, "exclude_organism": intent.get("exclude_organism"),
                  "reason": (f"Fan-out requested: run every program that accepts a "
                             f"{detected_type} query ({p} against {database_for_program(p)})."),
                  "rule": "blast-rules §3: all applicable programs"} for p in applicable_programs(detected_type)]
@@ -79,7 +79,7 @@ def choose_search(*, intent: dict, detected_type: str) -> dict:
         return {
             "program": "tblastn",
             "database": "est",
-            "organism_filter": target,
+            "organism_filter": target, "exclude_organism": intent.get("exclude_organism"),
             "reason": (
                 f"Protein query looking for a related gene in {target}: search the "
                 "protein against DNA/EST sequences (tblastn, Find-a-Gene pattern)."
@@ -90,7 +90,7 @@ def choose_search(*, intent: dict, detected_type: str) -> dict:
         return {
             "program": "blastp",
             "database": "refseq_protein",
-            "organism_filter": target,
+            "organism_filter": target, "exclude_organism": intent.get("exclude_organism"),
             "reason": "Protein query against a protein database (blastp).",
             "rule": "blast-rules §1: protein identify -> blastp/refseq_protein",
         }
@@ -98,14 +98,14 @@ def choose_search(*, intent: dict, detected_type: str) -> dict:
         return {
             "program": "blastn",
             "database": "refseq_nucleotide",
-            "organism_filter": target,
+            "organism_filter": target, "exclude_organism": intent.get("exclude_organism"),
             "reason": f"DNA query searched against nucleotide sequences, limited to {target} (blastn).",
             "rule": "blast-rules §1: DNA + target group -> blastn/refseq_nucleotide",
         }
     return {
         "program": "blastn",
         "database": "refseq_nucleotide",
-        "organism_filter": target,
+        "organism_filter": target, "exclude_organism": intent.get("exclude_organism"),
         "reason": "DNA query against a nucleotide database (blastn).",
         "rule": "blast-rules §1: DNA identify -> blastn/refseq_nucleotide",
     }
