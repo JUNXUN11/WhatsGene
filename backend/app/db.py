@@ -83,6 +83,44 @@ CREATE TABLE IF NOT EXISTS step_log (
     is_deviation INTEGER NOT NULL DEFAULT 0,
     deviation_reason TEXT
 );
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage (
+    user_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day, kind)
+);
+CREATE TABLE IF NOT EXISTS model_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    user_id INTEGER,
+    job_id TEXT,
+    kind TEXT NOT NULL,
+    prompt_chars INTEGER NOT NULL DEFAULT 0,
+    answer_chars INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    usage TEXT,
+    error TEXT
+);
+CREATE TABLE IF NOT EXISTS ask_cache (
+    job_id TEXT NOT NULL,
+    question_norm TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, question_norm)
+);
 """
 
 # Columns added after the boilerplate schema; applied to existing DBs.
@@ -100,6 +138,7 @@ _JOB_COLUMNS: dict[str, str] = {
     "msa_alignment": "TEXT",
     "tree_newick": "TEXT",
     "homologs": "TEXT NOT NULL DEFAULT '[]'",
+    "user_id": "INTEGER",
 }
 _SEARCH_COLUMNS: dict[str, str] = {
     "hits": "TEXT NOT NULL DEFAULT '[]'",
@@ -146,7 +185,8 @@ def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
 def create_job(*, question: str, raw_input: str, input_kind: str = "",
                whatsapp_user_id: str | None = None, source: str = "whatsapp",
                workflow_mode: str = "auto", requested_program: str | None = None,
-               notify_to: str | None = None, backend_choice: str = "server") -> dict[str, Any]:
+               notify_to: str | None = None, backend_choice: str = "server",
+               user_id: int | None = None) -> dict[str, Any]:
     job_id = f"WG-{uuid.uuid4().hex.upper()}"
     now = _now()
     with _lock, _connect() as conn:
@@ -154,11 +194,11 @@ def create_job(*, question: str, raw_input: str, input_kind: str = "",
             """
             INSERT INTO jobs (id, created_at, updated_at, status, question,
                               input_kind, raw_input, whatsapp_status, whatsapp_user_id,
-                              source, workflow_mode, requested_program, backend_choice, notify_to)
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?, ?)
+                              source, workflow_mode, requested_program, backend_choice, notify_to, user_id)
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?, ?, ?)
             """,
             (job_id, now, now, question, input_kind, raw_input, whatsapp_user_id,
-             source, workflow_mode, requested_program, backend_choice, notify_to),
+             source, workflow_mode, requested_program, backend_choice, notify_to, user_id),
         )
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return _row_to_job(row)
@@ -170,11 +210,17 @@ def get_job(job_id: str) -> dict[str, Any] | None:
     return _row_to_job(row) if row else None
 
 
-def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
+def list_jobs(limit: int = 50, user_id: int | None = None) -> list[dict[str, Any]]:
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if user_id is None:
+            rows = conn.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
     return [_row_to_job(r) for r in rows]
 
 
@@ -280,11 +326,12 @@ def claim_job(job_id: str) -> bool:
     return cur.rowcount == 1
 
 
-def related_jobs(job: dict, limit: int = 5) -> list[dict[str, Any]]:
+def related_jobs(job: dict, limit: int = 5, user_id: int | None = None) -> list[dict[str, Any]]:
     """Earlier workflows related by accession or identical sequence.
 
     Deterministic relevance (PRD Open question #5, website form): same
     resolved accession, or the same normalised sequence. Newest first.
+    When user_id is given, only that user's workflows are returned.
     """
     clauses, params = [], []
     if job.get("accession"):
@@ -295,10 +342,15 @@ def related_jobs(job: dict, limit: int = 5) -> list[dict[str, Any]]:
         params.append(job["sequence"])
     if not clauses:
         return []
-    sql = ("SELECT * FROM jobs WHERE id != ? AND (" + " OR ".join(clauses) +
-           ") ORDER BY created_at DESC LIMIT ?")
+    sql = ("SELECT * FROM jobs WHERE id != ? AND (" + " OR ".join(clauses) + ")")
+    args: list[Any] = [job["id"], *params]
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        args.append(user_id)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    args.append(limit)
     with _connect() as conn:
-        rows = conn.execute(sql, (job["id"], *params, limit)).fetchall()
+        rows = conn.execute(sql, args).fetchall()
     return [_row_to_job(r) for r in rows]
 
 
@@ -340,6 +392,135 @@ def delete_job(job_id: str) -> bool:
         conn.execute("DELETE FROM step_log WHERE job_id = ?", (job_id,))
         conn.execute("DELETE FROM searches WHERE job_id = ?", (job_id,))
     return True
+
+
+# --- auth: users + sessions (single seeded user, no signup) ---
+
+def create_user(username: str, password_hash: str) -> dict[str, Any]:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (username, password_hash, _now()),
+        )
+        row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    return dict(row)
+
+
+def get_user(user_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_username(username: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    return dict(row) if row else None
+
+
+def user_count() -> int:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
+    return int(row[0])
+
+
+def create_session(user_id: int, token: str, expires_at: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, _now(), expires_at),
+        )
+
+
+def get_session(token: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM sessions WHERE token = ?", (token,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_session(token: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+
+
+def delete_expired_sessions(now_iso: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_iso,))
+
+
+def adopt_orphan_jobs(user_id: int) -> int:
+    """Stamp pre-auth jobs (user_id NULL) as owned by the seeded user."""
+    with _lock, _connect() as conn:
+        cur = conn.execute("UPDATE jobs SET user_id = ? WHERE user_id IS NULL", (user_id,))
+    return cur.rowcount
+
+
+# --- model guardrails: daily usage, call log, Ask cache ---
+
+def today_iso() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def get_usage(user_id: int, day: str, kind: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT count FROM usage WHERE user_id = ? AND day = ? AND kind = ?",
+            (user_id, day, kind)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def bump_usage(user_id: int, day: str, kind: str) -> int:
+    """Atomically increment a counter; return the new value."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO usage (user_id, day, kind, count) VALUES (?, ?, ?, 1) "
+            "ON CONFLICT (user_id, day, kind) DO UPDATE SET count = count + 1",
+            (user_id, day, kind))
+        row = conn.execute(
+            "SELECT count FROM usage WHERE user_id = ? AND day = ? AND kind = ?",
+            (user_id, day, kind)).fetchone()
+    return int(row[0])
+
+
+def log_model_call(*, user_id: int | None, job_id: str | None, kind: str,
+                   prompt_chars: int = 0, answer_chars: int = 0,
+                   latency_ms: int = 0, usage: str | None = None,
+                   error: str | None = None) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            """INSERT INTO model_calls
+               (created_at, user_id, job_id, kind, prompt_chars, answer_chars,
+                latency_ms, usage, error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (_now(), user_id, job_id, kind, prompt_chars, answer_chars,
+             latency_ms, usage, error))
+
+
+def list_model_calls(limit: int = 200) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM model_calls ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def normalize_question(question: str) -> str:
+    return " ".join((question or "").split()).lower()
+
+
+def get_cached_answer(job_id: str, question_norm: str) -> str | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT answer FROM ask_cache WHERE job_id = ? AND question_norm = ?",
+            (job_id, question_norm)).fetchone()
+    return row[0] if row else None
+
+
+def put_cached_answer(job_id: str, question_norm: str, answer: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO ask_cache (job_id, question_norm, answer, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (job_id, question_norm, answer, _now()))
 
 
 def delete_user_history(whatsapp_user_id: str) -> int:

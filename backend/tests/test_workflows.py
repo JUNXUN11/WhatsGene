@@ -197,6 +197,12 @@ class TestWhatsAppClient(Base):
             config.WHATSAPP_TOKEN, config.WHATSAPP_PHONE_NUMBER_ID = old_token, old_id
 
 
+def _login(client) -> None:
+    """Seed credentials are set before TestClient starts (lifespan seeds)."""
+    resp = client.post("/auth/login", json={"username": "reviewer", "password": "test-password"})
+    assert resp.status_code == 200, resp.text
+
+
 class TestWebApi(Base):
     def test_submit_ask_and_cancel(self):
         from fastapi.testclient import TestClient
@@ -204,9 +210,12 @@ class TestWebApi(Base):
         from app.main import app
 
         old_backend, old_case = config.SEARCH_BACKEND, config.FIXTURE_CASE
+        old_user, old_pw = config.AUTH_USERNAME, config.AUTH_PASSWORD
         config.SEARCH_BACKEND, config.FIXTURE_CASE = "fixture", ""
+        config.AUTH_USERNAME, config.AUTH_PASSWORD = "reviewer", "test-password"
         try:
             with TestClient(app) as client:
+                _login(client)
                 created = client.post("/jobs", json={
                     "sequence": SHORT_QUERY, "question": "parameters?",
                     "workflow_mode": "single", "program": "blastp"})
@@ -221,6 +230,7 @@ class TestWebApi(Base):
                 self.assertNotIn("notify_to", job)
         finally:
             config.SEARCH_BACKEND, config.FIXTURE_CASE = old_backend, old_case
+            config.AUTH_USERNAME, config.AUTH_PASSWORD = old_user, old_pw
 
 
 if __name__ == "__main__":
@@ -432,9 +442,12 @@ class TestBackendChoice(Base):
         from app.main import app
 
         old_backend = config.SEARCH_BACKEND
+        old_user, old_pw = config.AUTH_USERNAME, config.AUTH_PASSWORD
         config.SEARCH_BACKEND = "fixture"
+        config.AUTH_USERNAME, config.AUTH_PASSWORD = "reviewer", "test-password"
         try:
             with TestClient(app) as client:
+                _login(client)
                 created = client.post("/jobs", json={
                     "sequence": SHORT_QUERY, "question": "parameters?",
                     "workflow_mode": "single", "program": "blastp",
@@ -443,3 +456,4 @@ class TestBackendChoice(Base):
                 self.assertEqual(created.json()["backend_choice"], "server")
         finally:
             config.SEARCH_BACKEND = old_backend
+            config.AUTH_USERNAME, config.AUTH_PASSWORD = old_user, old_pw

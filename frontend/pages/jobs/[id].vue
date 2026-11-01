@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { Job } from '~/types/job'
 
+definePageMeta({ middleware: 'auth' })
+
 const route = useRoute()
 const router = useRouter()
 const { getJob, cancelJob, deleteJob, askJob, alignJob } = useApi()

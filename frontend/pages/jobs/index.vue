@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { Job } from '~/types/job'
 
+definePageMeta({ middleware: 'auth' })
+
 const { listJobs, cancelJob, deleteJob } = useApi()
 const { push } = useToasts()
 const jobs = ref<Job[]>([])

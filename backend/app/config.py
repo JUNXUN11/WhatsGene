@@ -55,6 +55,18 @@ PUBLIC_BASE_URL: str = _env("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("
 FRONTEND_BASE_URL: str = _env("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
 DATABASE_PATH: Path = Path(_env("DATABASE_PATH", "./whatsgene.db"))
 
+# --- Model Ask guardrails (decision 007): quotas, cache, kill switch ---
+MODEL_ASK_ENABLED: bool = _env("MODEL_ASK_ENABLED", "false").lower() in ("1", "true", "yes")
+ASK_DAILY_LIMIT: int = int(_env("ASK_DAILY_LIMIT", "20") or "20")
+JOBS_DAILY_LIMIT: int = int(_env("JOBS_DAILY_LIMIT", "10") or "10")
+MODEL_MAX_TOKENS: int = int(_env("MODEL_MAX_TOKENS", "400") or "400")
+MODEL_TIMEOUT_SECONDS: float = float(_env("MODEL_TIMEOUT_SECONDS", "60") or "60")
+
+# --- Auth: one seeded user, no signup (decision 007) ---
+AUTH_USERNAME: str = _env("AUTH_USERNAME", "reviewer")
+AUTH_PASSWORD: str = _env("AUTH_PASSWORD")
+COOKIE_SECURE: bool = _env("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+
 # --- WhatsApp Cloud API ---
 WHATSAPP_TOKEN: str = _env("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_NUMBER_ID: str = _env("WHATSAPP_PHONE_NUMBER_ID")

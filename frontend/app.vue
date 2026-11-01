@@ -1,5 +1,14 @@
 <script setup lang="ts">
 useJobWatcher()
+const { status, username, ensure, logout } = useAuth()
+const route = useRoute()
+
+onMounted(() => { ensure() })
+
+async function signOut() {
+  await logout()
+  if (route.path !== '/') await navigateTo('/')
+}
 </script>
 
 <template>
@@ -14,13 +23,22 @@ useJobWatcher()
               <path d="M7.5 7h9M7.5 12h9M7.5 17h9" stroke-width="2" />
             </svg>
           </span>
-          Whats<span>Gene</span>
+          <span class="brand-word">Whats<span>Gene</span></span>
         </NuxtLink>
         <nav aria-label="Main">
           <NuxtLink to="/">Home</NuxtLink>
-          <NuxtLink to="/new">New search</NuxtLink>
-          <NuxtLink to="/jobs">Workflows</NuxtLink>
+          <template v-if="status === 'in'">
+            <NuxtLink to="/new">New search</NuxtLink>
+            <NuxtLink to="/jobs">Workflows</NuxtLink>
+          </template>
         </nav>
+        <div class="header-auth">
+          <template v-if="status === 'in'">
+            <span class="header-user">{{ username }}</span>
+            <button class="btn btn-small btn-secondary" @click="signOut">Log out</button>
+          </template>
+          <NuxtLink v-else-if="status === 'out'" to="/login" class="btn btn-small">Log in</NuxtLink>
+        </div>
       </div>
     </header>
     <ToastStack />

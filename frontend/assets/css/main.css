@@ -72,7 +72,7 @@ a:hover { text-decoration-thickness: 2px; }
   letter-spacing: -0.02em;
   flex: none;
 }
-.site-header .brand > span:last-child { color: var(--accent); }
+.site-header .brand-word > span { color: var(--accent); }
 .site-header .brand .brand-mark { color: #fff; }
 .brand-mark {
   width: 32px;
@@ -98,6 +98,10 @@ a:hover { text-decoration-thickness: 2px; }
 }
 .site-header nav a:hover { color: var(--ink); background: var(--panel); text-decoration: none; }
 .site-header nav a.router-link-exact-active { color: var(--ink); background: var(--panel); }
+.header-auth { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.header-user { font-size: 13px; font-weight: 600; color: var(--muted); max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-card { max-width: 460px; }
+.auth-card .btn { width: 100%; }
 @media (max-width: 720px) {
   .header-inner { padding: 0 14px; gap: 10px; }
   .site-header .brand { font-size: 15.5px; gap: 5px; }
@@ -227,7 +231,7 @@ legend::before {
 }
 label { display: block; font-weight: 600; font-size: 13.5px; margin: 18px 0 6px; color: var(--ink-2); }
 label:first-of-type { margin-top: 10px; }
-textarea, input[type="text"], .select {
+textarea, input[type="text"], input[type="password"], .select {
   width: 100%;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);

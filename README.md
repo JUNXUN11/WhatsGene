@@ -61,6 +61,15 @@ BLAST+ against a local database at `$BLASTDB`), `ncbi` (opt-in remote:
 submit at most once per in-flight search, poll each RID no more than once
 a minute), `fixture` (recorded data for tests and demos).
 
+## Reviewer demo login
+
+The homepage is public; search, workflows and Ask need the reviewer
+account. Set `AUTH_USERNAME`/`AUTH_PASSWORD` in `backend/.env` (created on
+first startup); on the live HTTPS server also set `COOKIE_SECURE=true`.
+Log in at `/login` — protected pages bounce there on their own. The live
+Ask answers (Muse credit) stay off until `MODEL_ASK_ENABLED=true`, and are
+then capped by `ASK_DAILY_LIMIT`/`JOBS_DAILY_LIMIT` with every call logged.
+
 ## Tests
 
 ```bash
@@ -69,11 +78,12 @@ cd frontend && npm run build
 ```
 
 Offline eval suite on textbook/lab cases (beta globin, insulin, RBP4,
-neuroglobin-vs-mosses, short-query profile, CDS subrange, HIV-1 exclusion, MSA/tree): **83 tests,
+neuroglobin-vs-mosses, short-query profile, CDS subrange, HIV-1 exclusion, MSA/tree): **105 tests,
 all passing**, no network required.
 
 ## Not building yet (roadmap)
 
 PSI-BLAST iterations, PHI-BLAST, HMMER, Tajima's test, bootstrapping,
-auth, HIV-1 organism-exclusion with unexpected-taxa flags. MSA → tree
-follows the course rules when provided.
+HIV-1 organism-exclusion with unexpected-taxa flags. MSA → tree
+follows the course rules when provided. (Single-user reviewer auth and
+guarded model Ask shipped 1 Nov, decision 007.)

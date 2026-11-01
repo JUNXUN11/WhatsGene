@@ -1,4 +1,6 @@
 <script setup lang="ts">
+definePageMeta({ middleware: 'auth' })
+
 const { createJob } = useApi()
 const router = useRouter()
 const route = useRoute()
