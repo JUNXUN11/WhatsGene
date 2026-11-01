@@ -14,6 +14,39 @@ const whatsapp = ref('')
 const searchBackend = ref<'server' | 'local' | 'ncbi'>('server')
 const busy = ref(false)
 const error = ref('')
+const showSubmitConfirm = ref(false)
+const showResetConfirm = ref(false)
+// Sequence-first (decision: owner, 2 Nov): the query box is the whole form.
+// Everything below it (target, program, backend, notify) is optional and
+// starts collapsed; it opens when a link or sample carries a question.
+const optionsOpen = ref(false)
+
+const backendLabels: Record<string, string> = {
+  server: 'Server default',
+  local: 'Local BLAST (private, this server)',
+  ncbi: 'Real NCBI BLAST (sequence leaves this server)',
+}
+
+const isDirty = computed(() => {
+  return sequence.value.trim() !== ''
+    || organism.value.trim() !== ''
+    || question.value.trim() !== ''
+    || mode.value !== 'auto'
+    || program.value !== 'blastp'
+    || whatsapp.value.trim() !== ''
+    || searchBackend.value !== 'server'
+})
+
+const modeLabel = computed(() => {
+  if (mode.value === 'auto') return 'Auto (rules engine picks)'
+  if (mode.value === 'all') return 'All programs'
+  return program.value
+})
+
+function queryPreview(): string {
+  const s = sequence.value.trim().replace(/\s+/g, ' ')
+  return s.length > 90 ? `${s.slice(0, 90)}…` : s
+}
 
 const samples = [
   { label: 'Beta globin in nematodes', sequence: 'NP_000509', question: 'Is there a related gene in nematodes, and how confident can I be?' },
@@ -24,12 +57,16 @@ const samples = [
 onMounted(() => {
   const q = route.query
   if (typeof q.sequence === 'string' && q.sequence) sequence.value = q.sequence
-  if (typeof q.question === 'string' && q.question) question.value = q.question
+  if (typeof q.question === 'string' && q.question) {
+    question.value = q.question
+    optionsOpen.value = true
+  }
 })
 
 function useSample(s: (typeof samples)[number]) {
   sequence.value = s.sequence
   question.value = s.question
+  if (s.question) optionsOpen.value = true
   error.value = ''
 }
 
@@ -68,6 +105,12 @@ function resetForm() {
   whatsapp.value = ''
   searchBackend.value = 'server'
   error.value = ''
+  showResetConfirm.value = false
+}
+
+function askReset() {
+  if (!isDirty.value) return
+  showResetConfirm.value = true
 }
 
 function fullQuestion(): string {
@@ -77,12 +120,16 @@ function fullQuestion(): string {
   return `${q.replace(/[?.!\s]+$/, '')} — look in ${org}`
 }
 
-async function submit() {
+function submit() {
   error.value = ''
   if (!sequence.value.trim()) {
     error.value = 'Paste a sequence, FASTA, or an accession first.'
     return
   }
+  showSubmitConfirm.value = true
+}
+
+async function confirmSubmit() {
   busy.value = true
   try {
     const job = await createJob(sequence.value.trim(), fullQuestion(), {
@@ -95,6 +142,7 @@ async function submit() {
   } catch (e: unknown) {
     const err = e as { data?: { detail?: string }; message?: string }
     error.value = err.data?.detail || err.message || 'Could not queue this workflow. Is the backend running on port 8000?'
+    showSubmitConfirm.value = false
   } finally {
     busy.value = false
   }
@@ -103,32 +151,10 @@ async function submit() {
 
 <template>
   <main class="page new-page">
-    <nav class="crumbs" aria-label="Breadcrumb"><NuxtLink to="/">Home</NuxtLink><span class="sep">/</span><span>New search</span></nav>
     <h1>New search</h1>
-    <p class="lede">Pick a program, fill in the panels, queue the run — the search finishes in the background.</p>
+    <p class="lede">Paste a sequence or accession — WhatsGene picks the BLAST program, runs the search in the background, and classifies every hit for you. Add a target organism or a question only when you need a narrower answer.</p>
 
     <form @submit.prevent="submit">
-      <div class="prog-tabs-block">
-        <p class="prog-tabs-label">Program selection</p>
-        <div class="prog-tabs" role="tablist" aria-label="BLAST program">
-          <button
-            v-for="t in progTabs"
-            :key="t.id"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab() === t.id"
-            :class="['prog-tab', { 'prog-tab-active': activeTab() === t.id }]"
-            @click="selectTab(t.id)"
-          >{{ t.label }}</button>
-        </div>
-        <p class="hint">
-          <span v-if="mode === 'auto'"><strong>Auto</strong> — the rules engine picks the best program and database for your query type.</span>
-          <span v-else-if="mode === 'all'"><strong>All</strong> — protein queries run blastp + tblastn; DNA queries run blastn + blastx + tblastx. Each stores its own parameters and hits for comparison.</span>
-          <span v-else><strong class="mono">{{ program }}</strong> only — incompatible program/query pairs are rejected with the applicable list; nothing is submitted.</span>
-        </p>
-      </div>
-
-      <div class="new-grid">
       <fieldset>
         <legend>Enter query sequence</legend>
         <label for="seq">Accession, FASTA, or raw sequence</label>
@@ -138,52 +164,102 @@ async function submit() {
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>Target and question</legend>
-        <label for="org">Target organism or group (optional)</label>
-        <input id="org" v-model="organism" type="text" placeholder="nematodes — or C. elegans, human, E. coli …">
-        <p class="hint">Appended to your question so the rules engine limits the search to that group.</p>
-        <label for="q">Your question</label>
-        <input id="q" v-model="question" type="text" placeholder="Is there a related gene in nematodes?">
-      </fieldset>
-
-      <fieldset>
-        <legend>Search options</legend>
-        <label for="backend">Search on</label>
-        <select id="backend" v-model="searchBackend" class="select">
-          <option value="server">Server default (whatever this host is configured for)</option>
-          <option value="local">Local BLAST — this server, Swiss-Prot, private</option>
-          <option value="ncbi">Real NCBI BLAST — all programs and databases, slower</option>
-        </select>
-        <p v-if="searchBackend === 'local'" class="hint">Stays on this server; nothing is sent to NCBI.</p>
-        <p v-if="searchBackend === 'ncbi'" class="hint">Your sequence is sent to NCBI's public BLAST service. Queues can take minutes to hours — the workflow runs in the background either way.</p>
-        <details class="algo">
-          <summary>Algorithm parameters</summary>
-          <div class="algo-body">
-            <p>Set automatically by the rules engine — you do not pick them by hand:</p>
-            <ul>
-              <li>Query type and length choose the program, database, E-value cutoff, word size and matrix.</li>
-              <li>Short protein queries switch to the short-query profile on their own.</li>
-              <li>Every search stores the exact values it ran with — see them quoted on the results page.</li>
-            </ul>
+      <div class="more-options">
+        <button
+          type="button"
+          class="more-toggle"
+          :aria-expanded="optionsOpen"
+          aria-controls="more-options-body"
+          @click="optionsOpen = !optionsOpen"
+        >
+          <span class="more-chevron" :class="{ 'more-chevron-open': optionsOpen }" aria-hidden="true">›</span>
+          More options
+          <span class="more-toggle-hint">target organism, question, program, backend</span>
+        </button>
+        <div v-show="optionsOpen" id="more-options-body" class="more-body">
+          <div class="prog-tabs-block">
+            <p class="prog-tabs-label">Program selection</p>
+            <div class="prog-tabs" role="tablist" aria-label="BLAST program">
+              <button
+                v-for="t in progTabs"
+                :key="t.id"
+                type="button"
+                role="tab"
+                :aria-selected="activeTab() === t.id"
+                :class="['prog-tab', { 'prog-tab-active': activeTab() === t.id }]"
+                @click="selectTab(t.id)"
+              >{{ t.label }}</button>
+            </div>
           </div>
-        </details>
-      </fieldset>
 
-      <fieldset>
-        <legend>Notification (optional)</legend>
-        <label for="wa">WhatsApp number for the done notification</label>
-        <input id="wa" v-model="whatsapp" type="text" placeholder="e.g. 60123456789 — leave blank to just watch this page">
-        <p class="hint">Stored server-side only, never shown on results pages. Outbound delivery is deferred (Meta verification), so watch here for now.</p>
-      </fieldset>
+          <div class="new-grid">
+          <fieldset>
+            <legend>Target and question</legend>
+            <label for="org">Target organism or group (optional)</label>
+            <input id="org" v-model="organism" type="text" placeholder="nematodes — or C. elegans, human, E. coli …">
+            <label for="q">Your question</label>
+            <input id="q" v-model="question" type="text" placeholder="Is there a related gene in nematodes?">
+          </fieldset>
+
+          <fieldset>
+            <legend>Search options</legend>
+            <label for="backend">Search on</label>
+            <select id="backend" v-model="searchBackend" class="select">
+              <option value="server">Server default (whatever this host is configured for)</option>
+              <option value="local">Local BLAST — this server, Swiss-Prot, private</option>
+              <option value="ncbi">Real NCBI BLAST — all programs and databases, slower</option>
+            </select>
+          </fieldset>
+
+          <fieldset>
+            <legend>Notification (optional)</legend>
+            <label for="wa">WhatsApp number for the done notification</label>
+            <input id="wa" v-model="whatsapp" type="text" placeholder="e.g. 60123456789 — leave blank to just watch this page">
+          </fieldset>
+          </div>
+        </div>
       </div>
 
       <div class="submit-row">
-        <button class="btn" type="submit" :disabled="busy">{{ busy ? 'Queueing…' : 'Run search →' }}</button>
-        <button class="btn btn-secondary" type="button" :disabled="busy" @click="resetForm">Reset</button>
-        <span class="hint">Queueing is instant. You will land on the live workflow page.</span>
+        <button class="btn" type="submit" :disabled="busy">Run search →</button>
+        <button class="btn btn-secondary" type="button" :disabled="busy || !isDirty" @click="askReset">Reset</button>
       </div>
       <p v-if="error" class="error">{{ error }}</p>
     </form>
+
+    <ConfirmDialog
+      :open="showSubmitConfirm"
+      title="Queue this search?"
+      confirm-label="Queue search"
+      :busy="busy"
+      busy-label="Queueing…"
+      @confirm="confirmSubmit"
+      @cancel="showSubmitConfirm = false"
+    >
+      <dl v-if="!busy" class="confirm-summary">
+        <div><dt>Query</dt><dd class="mono">{{ queryPreview() }}</dd></div>
+        <div><dt>Question</dt><dd>{{ fullQuestion() || 'Identify this sequence' }}</dd></div>
+        <div><dt>Program</dt><dd>{{ modeLabel }}</dd></div>
+        <div><dt>Search on</dt><dd>{{ backendLabels[searchBackend] }}</dd></div>
+      </dl>
+      <p v-else class="confirm-progress">
+        <span class="spinner" aria-hidden="true" />
+        Queueing your search — opening the live workflow page next.
+      </p>
+      <p v-if="searchBackend === 'ncbi' && !busy" class="hint">
+        Your sequence will be sent to NCBI's public BLAST service.
+      </p>
+    </ConfirmDialog>
+
+    <ConfirmDialog
+      :open="showResetConfirm"
+      title="Reset this form?"
+      confirm-label="Reset form"
+      danger
+      @confirm="resetForm"
+      @cancel="showResetConfirm = false"
+    >
+      <p>Every field goes back to its default. This cannot be undone.</p>
+    </ConfirmDialog>
   </main>
 </template>

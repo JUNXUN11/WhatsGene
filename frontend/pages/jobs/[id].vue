@@ -16,28 +16,68 @@ const asking = ref(false)
 const aligning = ref(false)
 const alignError = ref('')
 const confirmingDelete = ref(false)
+const POLL_SECONDS = 5
+const countdown = ref(POLL_SECONDS)
+const now = ref(new Date())
 let timer: ReturnType<typeof setInterval> | undefined
+let clock: ReturnType<typeof setInterval> | undefined
+
+function stopTimers() {
+  if (timer) clearInterval(timer)
+  if (clock) clearInterval(clock)
+  timer = undefined
+  clock = undefined
+}
 
 async function load() {
+  countdown.value = POLL_SECONDS
   try {
     job.value = await getJob(String(route.params.id))
     error.value = ''
-    if (job.value && !isActive(job.value) && timer) {
-      clearInterval(timer)
-    }
+    if (job.value && !isActive(job.value)) stopTimers()
   } catch (e: unknown) {
     const err = e as { data?: { detail?: string }; message?: string }
     error.value = err.data?.detail || err.message || 'Could not load this job.'
-    if (timer) clearInterval(timer)
+    stopTimers()
   }
 }
 
 onMounted(() => {
   load()
-  timer = setInterval(load, 5000)
+  timer = setInterval(load, POLL_SECONDS * 1000)
+  clock = setInterval(() => {
+    now.value = new Date()
+    if (countdown.value > 0) countdown.value -= 1
+  }, 1000)
 })
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
+onUnmounted(stopTimers)
+
+function fmtDateTime(s?: string | null): string {
+  if (!s) return '—'
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  return d.toLocaleString()
+}
+
+function fmtClock(d: Date): string {
+  return d.toLocaleTimeString()
+}
+
+function fmtElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) ms = 0
+  const s = Math.floor(ms / 1000)
+  const hh = String(Math.floor(s / 3600)).padStart(2, '0')
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0')
+  const ss = String(s % 60).padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
+}
+
+const elapsed = computed(() => {
+  const created = job.value?.created_at
+  if (!created) return '—'
+  const start = new Date(created).getTime()
+  if (Number.isNaN(start)) return '—'
+  return fmtElapsed(now.value.getTime() - start)
 })
 
 function isActive(j: Job) {
@@ -138,7 +178,7 @@ const suggestions = [
 
 <template>
   <main class="page">
-    <nav class="crumbs" aria-label="Breadcrumb"><NuxtLink to="/">Home</NuxtLink><span class="sep">/</span><NuxtLink to="/jobs">Workflows</NuxtLink><span class="sep">/</span><span class="mono">{{ route.params.id }}</span></nav>
+    <nav class="crumbs" aria-label="Breadcrumb"><NuxtLink to="/jobs">Workflows</NuxtLink><span class="sep">/</span><span class="mono">{{ route.params.id }}</span></nav>
 
     <p v-if="error" class="error">{{ error }}</p>
     <p v-else-if="!job">Loading workflow…</p>
@@ -161,16 +201,22 @@ const suggestions = [
         </span>
       </p>
 
-      <div v-if="isActive(job)" class="card run-panel">
-        <p style="margin: 0;">
-          {{ job.status === 'queued' ? 'Waiting for a worker.' : 'Searching — NCBI queues can take a while.' }}
-          <span v-if="currentStep()"><br>Current step: <strong>{{ currentStep() }}</strong></span>
-        </p>
-        <p class="hint" style="margin-bottom: 0;">You can leave this page — a notification pops up here when the run finishes.</p>
+      <div v-if="isActive(job)" class="card status-card">
+        <dl class="status-table">
+          <div><dt>Workflow ID</dt><dd class="mono">{{ job.id }}</dd></div>
+          <div><dt>Status</dt><dd><span class="status-pill" :class="`status-${job.status}`">{{ job.status === 'running' ? 'Calculating' : job.status }}</span></dd></div>
+          <div><dt>Submitted at</dt><dd>{{ fmtDateTime(job.created_at) }}</dd></div>
+          <div><dt>Current time</dt><dd>{{ fmtClock(now) }}</dd></div>
+          <div><dt>Time since submission</dt><dd class="mono">{{ elapsed }}</dd></div>
+        </dl>
+        <p v-if="currentStep()" class="status-step"><strong>Current step:</strong> {{ currentStep() }}</p>
+        <p v-else class="status-step">{{ job.status === 'queued' ? 'Waiting for a worker.' : 'Searching — NCBI queues can take a while.' }}</p>
+        <div class="progress-strip" aria-hidden="true"><span /></div>
+        <p class="hint status-refresh">This page will be automatically updated in {{ countdown }} second{{ countdown === 1 ? '' : 's' }}. You can leave — a notification pops up here when the run finishes.</p>
       </div>
       <p v-if="job.status === 'failed' && job.error" class="error">{{ job.error }}</p>
 
-      <section v-if="job.status === 'done'" aria-label="Verdict">
+      <section v-if="job.status === 'done'" aria-label="Verdict" class="fade-in">
         <h2>Verdict</h2>
         <div class="card verdict">
           <div class="verdict-top">

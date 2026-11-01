@@ -65,7 +65,6 @@ onUnmounted(() => {
 
 <template>
   <main class="page">
-    <nav class="crumbs" aria-label="Breadcrumb"><NuxtLink to="/">Home</NuxtLink><span class="sep">/</span><span>Workflows</span></nav>
     <div class="page-head">
       <h1>Workflows</h1>
       <NuxtLink to="/new" class="btn">+ New search</NuxtLink>

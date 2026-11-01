@@ -1,5 +1,6 @@
 <script setup lang="ts">
-const { status } = useAuth()
+// Guests only (middleware redirects logged-in visitors to /new).
+definePageMeta({ middleware: 'guest' })
 
 const samples = [
   { label: 'Beta globin in nematodes', sequence: 'NP_000509', question: 'Is there a related gene in nematodes, and how confident can I be?' },
@@ -25,13 +26,7 @@ function sampleLink(s: (typeof samples)[number]) {
             so you read a verdict with the exact E-value, identity and coverage behind it.
           </p>
           <p class="cta-row">
-            <template v-if="status === 'out'">
-              <NuxtLink to="/login?next=/new" class="btn">Log in to start a search →</NuxtLink>
-            </template>
-            <template v-else>
-              <NuxtLink to="/new" class="btn">Start a search →</NuxtLink>
-              <NuxtLink to="/jobs" class="quiet-link">View your workflows →</NuxtLink>
-            </template>
+            <NuxtLink to="/login?next=/new" class="btn">Log in to start a search →</NuxtLink>
           </p>
           <div class="hero-samples">
             <p>Try a sample search</p>
