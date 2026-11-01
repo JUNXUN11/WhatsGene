@@ -331,6 +331,17 @@ def latest_job_for_user(whatsapp_user_id: str) -> dict[str, Any] | None:
     return _row_to_job(row) if row else None
 
 
+def delete_job(job_id: str) -> bool:
+    """Delete one workflow and its searches + step log. False if missing."""
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        if cur.rowcount == 0:
+            return False
+        conn.execute("DELETE FROM step_log WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM searches WHERE job_id = ?", (job_id,))
+    return True
+
+
 def delete_user_history(whatsapp_user_id: str) -> int:
     with _lock, _connect() as conn:
         job_ids = [r[0] for r in conn.execute(

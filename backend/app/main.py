@@ -157,6 +157,19 @@ def cancel_job(job_id: str) -> dict:
     return _public_job(db.update_job(job_id, status="cancelled") or job)
 
 
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: str) -> dict:
+    """Delete a finished workflow and its stored searches + step log."""
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    if job["status"] in ("queued", "running"):
+        raise HTTPException(status_code=409,
+                            detail="This workflow is still running. Cancel it before deleting.")
+    db.delete_job(job_id)
+    return {"status": "deleted", "id": job_id}
+
+
 @app.post("/jobs/{job_id}/ask")
 def ask_job(job_id: str, body: AskBody) -> dict:
     """Grounded Q&A over this workflow's stored results (web Ask box)."""

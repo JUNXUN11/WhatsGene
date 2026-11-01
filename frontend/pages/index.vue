@@ -1,161 +1,100 @@
 <script setup lang="ts">
-const { createJob } = useApi()
-const router = useRouter()
-
-const sequence = ref('')
-const question = ref('')
-const mode = ref<'auto' | 'single' | 'all'>('auto')
-const program = ref('blastp')
-const whatsapp = ref('')
-const searchBackend = ref<'server' | 'local' | 'ncbi'>('server')
-const busy = ref(false)
-const error = ref('')
-
 const samples = [
   { label: 'Beta globin in nematodes', sequence: 'NP_000509', question: 'Is there a related gene in nematodes, and how confident can I be?' },
-  { label: 'Lab 04 short query (12 aa)', sequence: 'PNLHGLFGRKTG', question: 'What E-value cutoff, word size and matrix were used, and how do they compare to the defaults?' },
   { label: 'Insulin in C. elegans', sequence: 'NP_000198', question: 'Is there an insulin homolog in C. elegans?' },
+  { label: '12-aa short query', sequence: 'PNLHGLFGRKTG', question: 'What is this short peptide?' },
 ]
 
-function useSample(s: (typeof samples)[number]) {
-  sequence.value = s.sequence
-  question.value = s.question
-  error.value = ''
-}
-
-async function submit() {
-  error.value = ''
-  if (!sequence.value.trim()) {
-    error.value = 'Paste a sequence, FASTA, or an accession first.'
-    return
-  }
-  busy.value = true
-  try {
-    const job = await createJob(sequence.value.trim(), question.value.trim(), {
-      workflow_mode: mode.value,
-      search_backend: searchBackend.value,
-      program: mode.value === 'single' ? program.value : null,
-      whatsapp_number: whatsapp.value.trim() || null,
-    })
-    await router.push(`/jobs/${job.id}`)
-  } catch (e: unknown) {
-    const err = e as { data?: { detail?: string }; message?: string }
-    error.value = err.data?.detail || err.message || 'Could not queue this workflow. Is the backend running on port 8000?'
-  } finally {
-    busy.value = false
-  }
+function sampleLink(s: (typeof samples)[number]) {
+  return `/new?sequence=${encodeURIComponent(s.sequence)}&question=${encodeURIComponent(s.question)}`
 }
 </script>
 
 <template>
   <main class="page">
-    <p style="font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); font-weight: 700; margin: 0 0 8px;">WhatsGene — BLAST workflows</p>
-    <h1>Run BLAST in parallel. Read a verified answer, not a hit list.</h1>
-    <p class="lede">
-      For people who don't use BLAST every day. Paste a sequence or accession below:
-      WhatsGene queues a background workflow, picks the BLAST program with fixed rules
-      (or runs every program that fits your query), searches in parallel, classifies and
-      reciprocal-checks hits in code, and replies with the context — why this program,
-      the exact E-value cutoff, word size and matrix, the top hit, and how confident
-      you can be. Queue five searches in a minute; watch each one's status here.
-    </p>
-    <p style="font-size: 14px; color: var(--muted); margin: 0 0 8px;">
-      Status you will see: <strong>queued → running → done</strong> (or failed / cancelled) ·
-      every search stores its parameters and hits · ask follow-ups in the Ask box — answers quote stored values only.
-    </p>
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <p class="kicker">BLAST workflows for occasional users</p>
+          <h1>Ask once. Get a verified gene answer.</h1>
+          <p class="lede">
+            Paste an accession or sequence and ask in plain words. WhatsGene picks the BLAST program
+            with fixed rules, runs the search in the background, and classifies every hit in code —
+            so you read a verdict with the exact E-value, identity and coverage behind it.
+          </p>
+          <p class="cta-row">
+            <NuxtLink to="/new" class="btn">Start a search →</NuxtLink>
+            <NuxtLink to="/jobs" class="quiet-link">View your workflows →</NuxtLink>
+          </p>
+          <div class="hero-samples">
+            <p>Try a sample search</p>
+            <div class="sample-row" style="margin-top: 0;">
+              <NuxtLink v-for="s in samples" :key="s.label" :to="sampleLink(s)" class="sample-chip">{{ s.label }}</NuxtLink>
+            </div>
+          </div>
+        </div>
 
-    <form class="card" @submit.prevent="submit">
-      <label for="seq">Sequence, FASTA, or accession</label>
-      <textarea id="seq" v-model="sequence" placeholder="NP_000509 — or paste FASTA / a raw sequence such as PNLHGLFGRKTG" />
-      <div class="sample-row">
-        <button v-for="s in samples" :key="s.label" type="button" @click="useSample(s)">{{ s.label }}</button>
+        <aside class="preview-card" aria-label="Example result">
+          <div class="preview-head">
+            <span class="status-pill status-done">done</span>
+            <span class="mono">NP_000509 · blastp / nr</span>
+            <span class="preview-label">Example</span>
+          </div>
+          <div class="preview-body">
+            <p class="preview-verdict">Confirmed — a beta-globin homolog in nematodes, backed by a strong reciprocal hit.</p>
+            <dl class="preview-stats">
+              <div><dt>E-value</dt><dd>3e-48</dd></div>
+              <div><dt>Identity</dt><dd>68%</dd></div>
+              <div><dt>Coverage</dt><dd>96%</dd></div>
+            </dl>
+            <ul class="preview-log">
+              <li><span class="mono">STEP 1</span> Rules engine picked blastp — protein query, protein database.</li>
+              <li><span class="mono">STEP 2</span> Top hit classified <strong>strong</strong> by fixed thresholds in code.</li>
+              <li><span class="mono">STEP 3</span> Reciprocal check passed. Verdict stored with full parameters.</li>
+            </ul>
+          </div>
+        </aside>
       </div>
+    </section>
 
-      <label for="q">Your question</label>
-      <input id="q" v-model="question" type="text" placeholder="Is there a related gene in nematodes?">
-
-      <label for="mode">Workflow</label>
-      <select id="mode" v-model="mode" class="select">
-        <option value="auto">Auto — rules engine picks the best program</option>
-        <option value="all">Run all — every program that accepts this query type</option>
-        <option value="single">Single — I choose the program</option>
-      </select>
-      <div v-if="mode === 'single'" style="margin-top: 10px;">
-        <label for="prog">Program</label>
-        <select id="prog" v-model="program" class="select">
-          <option value="blastn">blastn (DNA → DNA)</option>
-          <option value="blastp">blastp (protein → protein)</option>
-          <option value="blastx">blastx (DNA → protein)</option>
-          <option value="tblastn">tblastn (protein → DNA)</option>
-          <option value="tblastx">tblastx (DNA → DNA, translated)</option>
-        </select>
-        <p class="hint">Incompatible program/query pairs are rejected with the applicable list — nothing is submitted.</p>
-      </div>
-      <p v-if="mode === 'all'" class="hint">Protein queries run blastp + tblastn; DNA queries run blastn + blastx + tblastx. Each stores its own parameters and hits for comparison.</p>
-
-      <label for="backend">Search on</label>
-      <select id="backend" v-model="searchBackend" class="select">
-        <option value="server">Server default (whatever this host is configured for)</option>
-        <option value="local">Local BLAST — this server, Swiss-Prot, private</option>
-        <option value="ncbi">Real NCBI BLAST — all programs and databases, slower</option>
-      </select>
-      <p v-if="searchBackend === 'local'" class="hint">Stays on this server; nothing is sent to NCBI. Supports blastp/blastn against Swiss-Prot; other programs are stored as failed with the reason.</p>
-      <p v-if="searchBackend === 'ncbi'" class="hint">Your sequence is sent to NCBI's public BLAST service (real API: submits paced at least 10s apart, each search polled at most once a minute, one NCBI search at a time). All five programs and remote databases work, but NCBI queues can take minutes to hours — the workflow runs in the background either way.</p>
-      <p v-if="searchBackend === 'server'" class="hint">Uses this host's configured backend. The results page always records which backend actually ran.</p>
-
-      <label for="wa">WhatsApp number for the done notification (optional)</label>
-      <input id="wa" v-model="whatsapp" type="text" placeholder="e.g. 60123456789 — leave blank to just watch this page">
-      <p class="hint">Stored server-side only, never shown on results pages. WhatsApp delivery is currently deferred (Meta business verification), so watch the workflows page for status today.</p>
-
-      <button class="btn" type="submit" :disabled="busy">{{ busy ? 'Queueing…' : 'Queue workflow' }}</button>
-      <p v-if="error" class="error">{{ error }}</p>
-    </form>
-
-    <div class="notice">
-      Short protein queries (30 aa or fewer, e.g. the 12-aa Lab 04 query PNLHGLFGRKTG) use the
-      short-query profile automatically: E-value cutoff 200,000, word size 2, matrix PAM30 —
-      versus the BLASTP defaults E=10, word size 3, BLOSUM62. The exact settings are stored on
-      every search and shown on the results page.
+    <p class="section-label">How a run goes</p>
+    <h2 style="margin-top: 0;">Three steps, no queue-watching</h2>
+    <div class="tool-grid">
+      <article class="step-card">
+        <span class="step-num">1</span>
+        <h3>You ask</h3>
+        <p>Accession or raw sequence, a target organism, your question. Queue several searches and keep working — each one runs on its own.</p>
+      </article>
+      <article class="step-card">
+        <span class="step-num">2</span>
+        <h3>WhatsGene searches</h3>
+        <p>The rules engine picks blastn, blastp, blastx, tblastn or tblastx and the matching database. Long queues finish in the background.</p>
+      </article>
+      <article class="step-card">
+        <span class="step-num">3</span>
+        <h3>Code verifies, you read</h3>
+        <p>Hits are labelled strong, borderline or not significant by fixed thresholds. The top candidate must pass reciprocal, coverage and length checks.</p>
+      </article>
     </div>
 
-    <h2>How it runs</h2>
-    <p>
-      Submissions queue instantly and run in the background — queue several in a row and keep
-      working. Code validates and classifies; the model only interprets your question and words
-      the summary. Hits are labelled strong, borderline, or not significant by fixed thresholds,
-      the top candidate must pass reciprocal, coverage, length and annotation checks, and every
-      decision is logged with its reason.
-    </p>
+    <p class="section-label">What you get back</p>
+    <h2 style="margin-top: 0;">A result you can defend</h2>
+    <dl class="feature-list">
+      <div><dt>Verdict</dt><dd>Confirmed or not confirmed, in plain words — with the top hit named.</dd></div>
+      <div><dt>Evidence</dt><dd>E-value, % identity, % coverage and classification, quoted exactly as computed.</dd></div>
+      <div><dt>Reproducibility</dt><dd>Program, database, E cutoff, word size and matrix — everything needed to rerun it.</dd></div>
+      <div><dt>Follow-ups</dt><dd>Ask about the stored run. Answers quote stored values or say they cannot answer.</dd></div>
+    </dl>
 
-    <h2>WhatsApp — coming back later</h2>
-    <p>
-      WhatsApp start-and-notify is built and its inbound path is proven, but Meta currently
-      blocks our outbound replies until the business account is verified. So the website is
-      the way in for now: submit, track, and ask here. When the website work is complete we
-      retry WhatsApp; if it still cannot deliver, Telegram becomes the notification fallback.
-      Nothing about your searches changes either way.
-    </p>
+    <div class="notice">
+      Short protein queries (30 aa or fewer) switch to the short-query profile automatically: E-value cutoff 200,000, word size 2, matrix PAM30. Every search stores the exact settings it ran with.
+    </div>
 
-    <h2>About this service</h2>
-    <p style="font-size: 14px; color: var(--muted);">
-      WhatsGene is a research and education tool run by Too Jun Xun (Malaysia) — not medical
-      advice. Contact: junxun288@gmail.com. Your submitted sequence, question, search
-      parameters and results are stored so your workflows and follow-up answers can be shown;
-      local searches run on our server, and only remote (NCBI) searches send a sequence to
-      NCBI's public BLAST service. Full policy: ask for the privacy link on the results page footer.
+    <h2>Status while you wait</h2>
+    <p style="max-width: 70ch; color: var(--muted); line-height: 1.65;">
+      Workflows move <strong style="color: var(--ink-2);">queued → running → done</strong> (or failed / cancelled).
+      A notification pops up here the moment each one finishes. WhatsApp delivery is deferred until Meta verifies
+      the business account, so this page is the way to submit, track and ask for now.
     </p>
   </main>
 </template>
-
-<style scoped>
-.select {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 12px;
-  font: inherit;
-  font-size: 15px;
-  background: #fff;
-  color: var(--ink);
-}
-</style>

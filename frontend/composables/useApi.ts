@@ -37,6 +37,10 @@ export function useApi() {
     return await $fetch<Job>(`${base}/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
   }
 
+  async function deleteJob(id: string): Promise<{ status: string; id: string }> {
+    return await $fetch<{ status: string; id: string }>(`${base}/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
   async function alignJob(id: string): Promise<Job> {
     return await $fetch<Job>(`${base}/jobs/${encodeURIComponent(id)}/align`, { method: 'POST' })
   }
@@ -48,5 +52,5 @@ export function useApi() {
     return res.answer
   }
 
-  return { createJob, getJob, listJobs, cancelJob, askJob, alignJob, base }
+  return { createJob, getJob, listJobs, cancelJob, deleteJob, askJob, alignJob, base }
 }
