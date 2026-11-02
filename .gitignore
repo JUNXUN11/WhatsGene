@@ -19,7 +19,9 @@ frontend/.env
 .idea/
 .vscode/*
 !.vscode/extensions.json
-/docs/
+/docs/*
+!/docs/HOSTING.md
 /reference/
+/blastdb/
 CHANGELOG.md
 /AGENTS.md

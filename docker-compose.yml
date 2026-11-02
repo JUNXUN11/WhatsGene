@@ -1,0 +1,83 @@
+# WhatsGene — single-VPS stack (option 1A + 2C).
+#   https://<DOMAIN>/       -> frontend (Nuxt SSR, internal :3000)
+#   https://<DOMAIN>/api/*  -> backend  (FastAPI, internal :8000, prefix stripped)
+# Copy .env.production.example to .env, fill it in, then:
+#   docker compose up -d --build
+# The BLAST database is NOT baked into any image: put it in ./blastdb/
+# next to this file (see docs/HOSTING.md §4).
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env, e.g. whatsgene.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NUXT_PUBLIC_API_BASE: ${NUXT_PUBLIC_API_BASE:-https://${DOMAIN}/api}
+    restart: unless-stopped
+    environment:
+      # Runtime override; must match the build arg so SSR and browser agree.
+      NUXT_PUBLIC_API_BASE: ${NUXT_PUBLIC_API_BASE:-https://${DOMAIN}/api}
+      HOST: "0.0.0.0"
+      PORT: "3000"
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    # Deliberately no published ports: only Caddy can reach :8000.
+    expose:
+      - "8000"
+    environment:
+      SEARCH_BACKEND: ${SEARCH_BACKEND:-local}
+      BLASTDB: /blastdb
+      DATABASE_PATH: /data/whatsgene.db
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN}/api}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-https://${DOMAIN}}
+      NCBI_EMAIL: ${NCBI_EMAIL:-}
+      NCBI_TOOL: ${NCBI_TOOL:-WhatsGene}
+      NCBI_API_KEY: ${NCBI_API_KEY:-}
+      NCBI_POLL_INTERVAL_SECONDS: ${NCBI_POLL_INTERVAL_SECONDS:-60}
+      NCBI_MAX_WAIT_SECONDS: ${NCBI_MAX_WAIT_SECONDS:-1800}
+      AUTH_USERNAME: ${AUTH_USERNAME:-reviewer}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?Set a strong AUTH_PASSWORD in .env}
+      COOKIE_SECURE: "true"
+      MODEL_ASK_ENABLED: ${MODEL_ASK_ENABLED:-false}
+      ASK_DAILY_LIMIT: ${ASK_DAILY_LIMIT:-20}
+      JOBS_DAILY_LIMIT: ${JOBS_DAILY_LIMIT:-10}
+      MUSE_BASE_URL: ${MUSE_BASE_URL:-}
+      MUSE_API_KEY: ${MUSE_API_KEY:-}
+      MUSE_MODEL: ${MUSE_MODEL:-muse-spark-open}
+      MAX_SEARCHES_PER_JOB: ${MAX_SEARCHES_PER_JOB:-6}
+      MAX_JOB_SECONDS: ${MAX_JOB_SECONDS:-1800}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-3}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-change-me}
+      WHATSAPP_TEMPLATE_NAME: ${WHATSAPP_TEMPLATE_NAME:-whatsgene_job_done}
+    volumes:
+      # SQLite (jobs, hits, step log, sessions). Survives rebuilds.
+      - whatsgene_data:/data
+      # Local SwissProt copy (~1.2 GB): swissprot.*, sprot.taxidmap,
+      # names.dmp, nodes.dmp. Read-only; the app never writes here.
+      - ./blastdb:/blastdb:ro
+
+volumes:
+  whatsgene_data:
+  caddy_data:
+  caddy_config:

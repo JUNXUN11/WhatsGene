@@ -14,17 +14,18 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import agent, chat, config, db, whatsapp_client, worker
+from . import agent, auth, chat, config, db, whatsapp_client, worker
 from .search_backend import SearchError, get_backend
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init_db()
+    auth.ensure_seeded_user()
 
     async def _drain() -> None:
         while True:
@@ -41,6 +42,7 @@ app = FastAPI(title="WhatsGene", version="0.3.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[config.FRONTEND_BASE_URL, "http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -60,9 +62,65 @@ class AskBody(BaseModel):
     question: str
 
 
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+def current_user(request: Request) -> dict:
+    """Dependency: the logged-in user, or 401."""
+    user = auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE))
+    if not user:
+        raise HTTPException(status_code=401, detail="Not logged in.")
+    return {"id": user["id"], "username": user["username"]}
+
+
+def _owned_job(job_id: str, user: dict) -> dict:
+    """The job if owned by the caller, else 404 (never leaks existence)."""
+    job = db.get_job(job_id)
+    if not job or job.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    return job
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "whatsgene-backend"}
+
+
+@app.post("/auth/login")
+def login(body: LoginBody, response: Response) -> dict:
+    user = db.get_user_by_username((body.username or "").strip())
+    if not user or not auth.verify_password(body.password or "", user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Wrong username or password.")
+    token = auth.create_session_token()
+    db.create_session(user["id"], token, auth.session_expiry_iso())
+    # Split hosting (frontend and API on different sites) needs
+    # SameSite=None; browsers reject that without Secure, so force it.
+    samesite = config.COOKIE_SAMESITE
+    response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite=samesite,
+                        secure=config.COOKIE_SECURE or samesite == "none",
+                        max_age=auth.cookie_max_age(), path="/")
+    return {"username": user["username"]}
+
+
+@app.post("/auth/logout")
+def logout(request: Request, response: Response) -> dict:
+    token = request.cookies.get(auth.SESSION_COOKIE)
+    if token:
+        db.delete_session(token)
+    samesite = config.COOKIE_SAMESITE
+    response.delete_cookie(auth.SESSION_COOKIE, path="/", samesite=samesite,
+                           secure=config.COOKIE_SECURE or samesite == "none")
+    return {"status": "logged out"}
+
+
+@app.get("/auth/me")
+def me(request: Request) -> dict:
+    user = auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE))
+    if not user:
+        return {"authenticated": False}
+    return {"authenticated": True, "username": user["username"]}
 
 
 @app.get("/privacy")
@@ -86,7 +144,7 @@ def privacy() -> dict:
 
 
 @app.post("/jobs", status_code=201)
-def create_job(body: JobCreate) -> dict:
+def create_job(body: JobCreate, user: dict = Depends(current_user)) -> dict:
     """Queue a workflow and return at once; the worker runs it."""
     raw = (body.sequence or "").strip()
     if not raw:
@@ -94,11 +152,16 @@ def create_job(body: JobCreate) -> dict:
     mode = (body.workflow_mode or "auto").lower()
     if mode not in ("auto", "single", "all"):
         raise HTTPException(status_code=422, detail="workflow_mode must be auto, single, or all.")
+    if db.get_usage(user["id"], db.today_iso(), "jobs") >= config.JOBS_DAILY_LIMIT:
+        raise HTTPException(status_code=429,
+                            detail=f"Daily search limit reached ({config.JOBS_DAILY_LIMIT}/day).")
     notify = (body.whatsapp_number or "").strip() or None
     job = db.create_job(question=body.question or "", raw_input=raw,
                         whatsapp_user_id=notify, source=body.source or "web",
                         workflow_mode=mode, requested_program=body.program,
-                        notify_to=notify, backend_choice=(body.search_backend or "server"))
+                        notify_to=notify, backend_choice=(body.search_backend or "server"),
+                        user_id=user["id"])
+    db.bump_usage(user["id"], db.today_iso(), "jobs")
     try:
         backend = worker.backend_for_job(job)
     except SearchError as exc:
@@ -108,32 +171,28 @@ def create_job(body: JobCreate) -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if backend.name == "fixture":
         final = worker.run_job(job, backend)  # recorded data finishes instantly
-        return _public_job(final)
+        return _public_job(final, user["id"])
     worker.submit_async(job, backend)
-    return _public_job(db.get_job(job["id"]) or job)
+    return _public_job(db.get_job(job["id"]) or job, user["id"])
 
 
 @app.get("/jobs")
-def list_jobs(limit: int = Query(default=50, le=200)) -> list[dict]:
-    return [_public_job(j) for j in db.list_jobs(limit=limit)]
+def list_jobs(limit: int = Query(default=50, le=200),
+              user: dict = Depends(current_user)) -> list[dict]:
+    return [_public_job(j, user["id"]) for j in db.list_jobs(limit=limit, user_id=user["id"])]
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str) -> dict:
-    job = db.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
-    return _public_job(job)
+def get_job(job_id: str, user: dict = Depends(current_user)) -> dict:
+    return _public_job(_owned_job(job_id, user), user["id"])
 
 
 @app.post("/jobs/{job_id}/align")
-def align_job(job_id: str) -> dict:
+def align_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     """Tier 2: MSA + neighbor-joining tree from confirmed homologs."""
     from .msa import MsaError, run_alignment
 
-    job = db.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    job = _owned_job(job_id, user)
     if job["status"] != "done":
         raise HTTPException(status_code=409, detail="Alignment needs a finished workflow.")
     try:
@@ -144,42 +203,56 @@ def align_job(job_id: str) -> dict:
         final = run_alignment(job=job, search_backend=backend)
     except MsaError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _public_job(final)
+    return _public_job(final, user["id"])
 
 
 @app.post("/jobs/{job_id}/cancel")
-def cancel_job(job_id: str) -> dict:
-    job = db.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+def cancel_job(job_id: str, user: dict = Depends(current_user)) -> dict:
+    job = _owned_job(job_id, user)
     if job["status"] in ("done", "failed", "cancelled"):
-        return _public_job(job)
-    return _public_job(db.update_job(job_id, status="cancelled") or job)
+        return _public_job(job, user["id"])
+    return _public_job(db.update_job(job_id, status="cancelled") or job, user["id"])
+
+
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: str, user: dict = Depends(current_user)) -> dict:
+    """Delete a finished workflow and its stored searches + step log."""
+    _owned_job(job_id, user)
+    job = db.get_job(job_id)
+    assert job is not None
+    if job["status"] in ("queued", "running"):
+        raise HTTPException(status_code=409,
+                            detail="This workflow is still running. Cancel it before deleting.")
+    db.delete_job(job_id)
+    return {"status": "deleted", "id": job_id}
 
 
 @app.post("/jobs/{job_id}/ask")
-def ask_job(job_id: str, body: AskBody) -> dict:
+def ask_job(job_id: str, body: AskBody, user: dict = Depends(current_user)) -> dict:
     """Grounded Q&A over this workflow's stored results (web Ask box)."""
-    job = db.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
-    answer = agent.answer_followup(job=job, question=body.question,
-                                   searches=db.get_searches(job_id))
+    job = _owned_job(job_id, user)
+    try:
+        answer = agent.answer_followup(job=job, question=body.question,
+                                       searches=db.get_searches(job_id),
+                                       user_id=user["id"])
+    except agent.QuotaError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     if answer == "__FORGET_HISTORY__":
         return {"job_id": job_id, "answer": "Ask on WhatsApp to delete chat history, or use a job you own there."}
     return {"job_id": job_id, "answer": answer}
 
 
-def _public_job(job: dict) -> dict:
+def _public_job(job: dict, user_id: int | None = None) -> dict:
     """Strip server-side keys; attach searches, step log, metadata."""
-    public = {k: v for k, v in job.items() if k not in ("whatsapp_user_id", "notify_to")}
+    public = {k: v for k, v in job.items()
+              if k not in ("whatsapp_user_id", "notify_to", "user_id")}
     public["step_log"] = db.get_step_log(job["id"])
     public["searches"] = db.get_searches(job["id"])
     public["related_jobs"] = [
         {"id": r["id"], "question": r.get("question"), "status": r.get("status"),
          "outcome": r.get("outcome"), "program": r.get("program"),
          "created_at": r.get("created_at")}
-        for r in db.related_jobs(job)]
+        for r in db.related_jobs(job, user_id=user_id)]
     public["notify_configured"] = bool(job.get("notify_to") or job.get("whatsapp_user_id"))
     public["results_url"] = f"{config.FRONTEND_BASE_URL}/jobs/{job['id']}"
     backend_name = (job.get("parameters") or {}).get("backend", "ncbi")
