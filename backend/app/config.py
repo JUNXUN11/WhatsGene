@@ -66,6 +66,13 @@ MODEL_TIMEOUT_SECONDS: float = float(_env("MODEL_TIMEOUT_SECONDS", "60") or "60"
 AUTH_USERNAME: str = _env("AUTH_USERNAME", "reviewer")
 AUTH_PASSWORD: str = _env("AUTH_PASSWORD")
 COOKIE_SECURE: bool = _env("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+# Session cookie SameSite policy. "lax" (default) is correct when page and
+# API share one site (single-domain compose). Split hosting — frontend on
+# one domain, API on another — must set "none" (browsers then require
+# Secure, which login enforces). Unknown values fall back to "lax".
+COOKIE_SAMESITE: str = _env("COOKIE_SAMESITE", "lax").lower()
+if COOKIE_SAMESITE not in ("lax", "strict", "none"):
+    COOKIE_SAMESITE = "lax"
 
 # --- WhatsApp Cloud API ---
 WHATSAPP_TOKEN: str = _env("WHATSAPP_TOKEN")

@@ -41,6 +41,44 @@ class TestPasswords(Base):
         self.assertNotEqual(auth.hash_password("same"), auth.hash_password("same"))
 
 
+class TestCookiePolicy(Base):
+    def _login_cookie(self, client) -> str:
+        res = client.post("/auth/login", json={"username": "reviewer", "password": "s3cret-review"})
+        self.assertEqual(res.status_code, 200)
+        return res.headers.get("set-cookie", "")
+
+    def test_default_cookie_is_lax(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        old = config.COOKIE_SAMESITE
+        config.COOKIE_SAMESITE = "lax"
+        try:
+            with TestClient(app) as client:
+                cookie = self._login_cookie(client)
+        finally:
+            config.COOKIE_SAMESITE = old
+        self.assertIn("samesite=lax", cookie.lower())
+        self.assertIn("httponly", cookie.lower())
+
+    def test_split_hosting_cookie_is_none_and_secure(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        old_samesite, old_secure = config.COOKIE_SAMESITE, config.COOKIE_SECURE
+        config.COOKIE_SAMESITE = "none"
+        config.COOKIE_SECURE = False  # login must force Secure with None
+        try:
+            with TestClient(app) as client:
+                cookie = self._login_cookie(client)
+        finally:
+            config.COOKIE_SAMESITE, config.COOKIE_SECURE = old_samesite, old_secure
+        self.assertIn("samesite=none", cookie.lower())
+        self.assertIn("secure", cookie.lower())
+
+
 class TestSeed(Base):
     def test_seed_creates_user_and_adopts_orphan_jobs(self):
         orphan = db.create_job(question="q", raw_input="NP_000509")

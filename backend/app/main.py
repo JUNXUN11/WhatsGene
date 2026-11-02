@@ -95,8 +95,12 @@ def login(body: LoginBody, response: Response) -> dict:
         raise HTTPException(status_code=401, detail="Wrong username or password.")
     token = auth.create_session_token()
     db.create_session(user["id"], token, auth.session_expiry_iso())
-    response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="lax",
-                        secure=config.COOKIE_SECURE, max_age=auth.cookie_max_age(), path="/")
+    # Split hosting (frontend and API on different sites) needs
+    # SameSite=None; browsers reject that without Secure, so force it.
+    samesite = config.COOKIE_SAMESITE
+    response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite=samesite,
+                        secure=config.COOKIE_SECURE or samesite == "none",
+                        max_age=auth.cookie_max_age(), path="/")
     return {"username": user["username"]}
 
 
@@ -105,7 +109,9 @@ def logout(request: Request, response: Response) -> dict:
     token = request.cookies.get(auth.SESSION_COOKIE)
     if token:
         db.delete_session(token)
-    response.delete_cookie(auth.SESSION_COOKIE, path="/")
+    samesite = config.COOKIE_SAMESITE
+    response.delete_cookie(auth.SESSION_COOKIE, path="/", samesite=samesite,
+                           secure=config.COOKIE_SECURE or samesite == "none")
     return {"status": "logged out"}
 
 
