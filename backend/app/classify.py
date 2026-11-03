@@ -9,25 +9,33 @@ from __future__ import annotations
 from . import config
 
 
-def classify_hit(evalue: float, query_coverage: float) -> str:
+def classify_hit(evalue: float, query_coverage: float,
+                 cutoffs: dict | None = None) -> str:
     """Return 'strong' | 'borderline' | 'not_significant'.
 
-    query_coverage is a percent (0–100).
-    Rules (docs/blast-rules.md §6):
+    query_coverage is a percent (0–100). Default rules (blast-rules.md §7):
       strong          E <= 1e-5 and coverage >= 70%
       borderline      1e-5 < E <= 1e-2, or E <= 1e-5 with 30% <= coverage < 70%
       not_significant E > 1e-2, or coverage < 30% regardless of E
+
+    A job may carry a custom cut-off snapshot (Settings, decision 009);
+    the same shape is judged with those exact values instead.
     """
-    if query_coverage < config.BORDERLINE_MIN_COVERAGE:
+    c = cutoffs or {}
+    strong_e = float(c.get("strong_max_evalue", config.STRONG_MAX_EVALUE))
+    strong_cov = float(c.get("strong_min_coverage", config.STRONG_MIN_COVERAGE))
+    bord_e = float(c.get("borderline_max_evalue", config.BORDERLINE_MAX_EVALUE))
+    bord_cov = float(c.get("borderline_min_coverage", config.BORDERLINE_MIN_COVERAGE))
+    if query_coverage < bord_cov:
         return "not_significant"
-    if evalue > config.BORDERLINE_MAX_EVALUE:
+    if evalue > bord_e:
         return "not_significant"
-    if evalue <= config.STRONG_MAX_EVALUE and query_coverage >= config.STRONG_MIN_COVERAGE:
+    if evalue <= strong_e and query_coverage >= strong_cov:
         return "strong"
     return "borderline"
 
 
-def classify_hits(hits: list[dict]) -> list[dict]:
+def classify_hits(hits: list[dict], cutoffs: dict | None = None) -> list[dict]:
     """Add a 'classification' field to each parsed hit dict in place-safe copy."""
     out: list[dict] = []
     for hit in hits:
@@ -35,6 +43,7 @@ def classify_hits(hits: list[dict]) -> list[dict]:
         labelled["classification"] = classify_hit(
             float(hit.get("evalue", 999.0)),
             float(hit.get("query_coverage", 0.0)),
+            cutoffs,
         )
         out.append(labelled)
     return out

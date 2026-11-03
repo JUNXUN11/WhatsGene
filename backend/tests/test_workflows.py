@@ -75,6 +75,56 @@ class TestShortQueryProfile(Base):
                           requested_program="blastn")
         self.assertIn("blastp", str(ctx.exception))
 
+    def test_requested_database_overrides_rules_database(self):
+        plan = plan_programs(intent={}, detected_type="protein", mode="auto",
+                             requested_database="pdbaa")
+        self.assertEqual(plan[0]["program"], "blastp")
+        self.assertEqual(plan[0]["database"], "pdbaa")
+        self.assertIn("pdbaa", plan[0]["reason"])
+
+    def test_requested_database_adapts_auto_program(self):
+        plan = plan_programs(intent={}, detected_type="dna", mode="auto",
+                             requested_database="16s_rrna")
+        self.assertEqual(plan[0]["program"], "blastn")
+        self.assertEqual(plan[0]["database"], "16s_rrna")
+
+    def test_requested_database_type_mismatch_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            plan_programs(intent={}, detected_type="protein", mode="single",
+                          requested_program="blastp", requested_database="16s_rrna")
+        self.assertIn("nucleotide", str(ctx.exception))
+
+    def test_requested_database_cross_type_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            plan_programs(intent={}, detected_type="protein", mode="auto",
+                          requested_database="mito_genomic")
+        self.assertIn("tblastn", str(ctx.exception))
+
+    def test_requested_database_drops_unappliable_organism_filter(self):
+        intent = {"target_organism": "nematodes", "goal": "find_related_gene",
+                  "raw_question": "globin gene in nematodes"}
+        plan = plan_programs(intent=intent, detected_type="protein", mode="auto",
+                             requested_database="pdbaa")
+        self.assertIsNone(plan[0]["organism_filter"])
+        self.assertIn("not applied", plan[0]["reason"])
+
+    def test_requested_swissprot_keeps_organism_filter(self):
+        intent = {"target_organism": "nematodes", "goal": "identify_sequence",
+                  "raw_question": "what is this"}
+        plan = plan_programs(intent=intent, detected_type="protein", mode="auto",
+                             requested_database="swissprot")
+        self.assertEqual(plan[0]["organism_filter"], "nematodes")
+
+    def test_requested_database_unknown_rejected(self):
+        with self.assertRaises(ValueError):
+            plan_programs(intent={}, detected_type="protein", mode="auto",
+                          requested_database="nr_huge")
+
+    def test_requested_database_all_mode_rejected(self):
+        with self.assertRaises(ValueError):
+            plan_programs(intent={}, detected_type="protein", mode="all",
+                          requested_database="pdbaa")
+
 
 class TestFanoutWorkflow(Base):
     def _run_short_all(self) -> dict:
@@ -380,26 +430,28 @@ class TestMsaTree(Base):
 
 
 class TestResearchMemory(Base):
-    """2 Nov (website form): a new workflow visibly links to earlier ones."""
+    """Related earlier workflows were removed from results (owner, 2 Nov).
+
+    The store helper, the API field, and the results-page section are gone;
+    repeat runs of the same sequence still complete as independent jobs.
+    """
 
     def _run_globin(self, backend) -> dict:
         job = db.create_job(question="Identify this protein", raw_input=SHORT_QUERY,
                             whatsapp_user_id="mem", source="web", workflow_mode="auto")
         return process_job(job, backend)
 
-    def test_second_run_links_to_first_by_sequence(self):
+    def test_repeat_run_completes_without_related_linking(self):
         self._run_globin(_backend())
         second = self._run_globin(_backend())
-        related = db.related_jobs(second)
-        self.assertEqual(len(related), 1)
-        self.assertNotEqual(related[0]["id"], second["id"])
+        self.assertEqual(second["status"], "done")
+        self.assertFalse(hasattr(db, "related_jobs"))
 
-    def test_unrelated_sequence_has_no_links(self):
-        self._run_globin(_backend())
-        other = db.create_job(question="q", raw_input="ACGTACGTACGTACGTACGT",
-                              whatsapp_user_id="mem", source="web")
-        other = process_job(other, Fixture(primary_hits=[], reciprocal_hits={}))
-        self.assertEqual(db.related_jobs(other), [])
+    def test_public_job_has_no_related_jobs_field(self):
+        from app.main import _public_job
+
+        job = self._run_globin(_backend())
+        self.assertNotIn("related_jobs", _public_job(job))
 
 
 class TestBackendChoice(Base):

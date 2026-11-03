@@ -1,5 +1,12 @@
 # WhatsGene — Hosting guide (single VPS, local + real NCBI search)
 
+> **Superseded as product direction (2 Nov 2026, decision 008):**
+> WhatsGene is a local tool on the owner's own server, not a hosted
+> service. The `README.md` tutorial is the primary install path. Keep
+> this guide only for an owner who wants the tool on a private server
+> with HTTPS. The public-host plans below (A to E) are kept for the
+> record and are not the plan any more.
+
 Chosen setup (owner, 2 Nov 2026): **1A** one VPS running the whole stack
 with Docker Compose, **2C** local BLAST as the server default with real
 NCBI search selectable per workflow. **Free plan (owner, 2 Nov 2026):
@@ -44,6 +51,13 @@ BLAST DB.
   close to the demo and keep the demo job history on it.
 - Arm note: every Docker image in this repo is multi-arch, and §4
   rebuilds the BLAST DB natively on the VM. Do not reuse an x86_64 DB.
+
+**Plan A blocked (2 Nov, owner): no credit card.** Oracle signup needs
+a real credit/debit card, so Plan A cannot start. Note: a Malaysian
+bank **debit** card (Visa/Mastercard, overseas online use enabled) is
+not a credit card and usually passes Oracle's ~USD 1 hold — worth one
+try if you have one. With no card at all, use Plan B/C below and, if
+eligible, Plan D.
 
 **Plan B — Cloudflare Tunnel from your Mac (USD 0, no card, no signup).**
 Your Mac already runs the full stack with a working BLAST DB — a tunnel
@@ -99,6 +113,36 @@ address feeds the next step:
    changes. You must paste the new value into Vercel and redeploy.
    The site also dies when the Mac sleeps. Treat Plan C as a bridge
    until the backend also moves to a server (Plan A).
+
+**Plan C fix — use Tailscale Funnel for `API_URL` (stable, no domain).**
+Cloudflare quick tunnels change `API_URL` on every restart, which
+forces a Vercel redeploy each time. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel)
+on the free Personal plan (sign in with GitHub, no card, no domain to
+buy) gives the Mac a stable `https://<mac>.<tailnet>.ts.net` HTTPS
+address that survives reboots (`tailscale funnel --bg 8000`). Use that
+as `API_URL` in Plan C step 3. The Mac must still stay awake, so this
+remains a bridge — but the submitted URL no longer rots on restart.
+
+**Plan D — Azure for Students (only true no-card cloud VM; if eligible).**
+[Azure for Students](https://azure.microsoft.com/free/students) gives
+USD 100 for 12 months with **no credit card** — it verifies a school
+email instead (age 18+, renewable yearly while a student). This is the
+only no-card offer that runs §3–§5 unchanged: create one Ubuntu VM
+(2 vCPU / 4 GB, e.g. B2s — watch the credit burn and stop the VM when
+idle), then follow the Docker Compose steps as written. If you have no
+school email, this plan does not exist; stay on Plan C.
+
+**Plan E — Fully-cloud free PaaS (needs code work; not for 4 Nov).**
+Frontend on Vercel/Cloudflare Pages + backend on Render Free +
+workflows in Neon Free Postgres is USD 0 with no card, but only after
+two changes: `SEARCH_BACKEND=ncbi` (Render's 512 MB / ephemeral disk
+cannot hold the 1.6 GB BLAST DB) and moving `app/db.py` off the local
+SQLite file onto Neon (free, no card, 0.5 GB). Render sleeps after
+15 min idle, which kills in-flight NCBI polls, so an external pinger
+(e.g. UptimeRobot free) must hit `/health` every ~10 min during the
+review window. Half a day of work and a weaker demo — post-submission
+only. Hugging Face Spaces is **not** an option any more: new Docker
+Spaces require a paid PRO plan (checked 2 Nov 2026).
 
 **Checked and rejected (free tiers that break this stack):**
 

@@ -20,6 +20,7 @@ from app import config  # noqa: E402
 from app.search_backend import (  # noqa: E402
     Fixture,
     InflightGuard,
+    LocalBlast,
     SearchError,
     build_blast_command,
     expand_taxid,
@@ -303,6 +304,32 @@ class TestLocalHelpers(unittest.TestCase):
     def test_parse_empty_output_fails_loudly(self):
         with self.assertRaises(SearchError):
             parse_blastdbcmd_fasta("")
+
+    def test_local_db_map_includes_ncbi_built_databases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = LocalBlast(db_dir=tmp)
+            for name, stem in (("pdbaa", "pdbaa"),
+                               ("refseq_viral_protein", "refseq_viral_protein"),
+                               ("16s_rrna", "16s_rrna"),
+                               ("fungi_its", "fungi_its"),
+                               ("mito_genomic", "mito_genomic"),
+                               ("refseq_viral_genomic", "refseq_viral_genomic")):
+                (Path(tmp) / f"{stem}.pdb").write_text("")
+                (Path(tmp) / f"{stem}.ndb").write_text("")
+                self.assertEqual(backend._db_path(name), Path(tmp) / stem)
+
+    def test_local_db_missing_files_fail_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = LocalBlast(db_dir=tmp)
+            with self.assertRaises(SearchError) as ctx:
+                backend._db_path("pdbaa")
+            self.assertIn("pdbaa", str(ctx.exception))
+
+    def test_local_db_unknown_database_fail_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = LocalBlast(db_dir=tmp)
+            with self.assertRaises(SearchError):
+                backend._db_path("est")
 
 
 NAMES_DMP = (

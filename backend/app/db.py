@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     source TEXT NOT NULL DEFAULT 'whatsapp',
     workflow_mode TEXT NOT NULL DEFAULT 'auto',
     requested_program TEXT,
+    requested_database TEXT,
     backend_choice TEXT NOT NULL DEFAULT 'server',
     notify_to TEXT,
     msa_alignment TEXT,
@@ -121,6 +122,11 @@ CREATE TABLE IF NOT EXISTS ask_cache (
     created_at TEXT NOT NULL,
     PRIMARY KEY (job_id, question_norm)
 );
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER PRIMARY KEY,
+    profile TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+);
 """
 
 # Columns added after the boilerplate schema; applied to existing DBs.
@@ -133,12 +139,15 @@ _JOB_COLUMNS: dict[str, str] = {
     "source": "TEXT NOT NULL DEFAULT 'whatsapp'",
     "workflow_mode": "TEXT NOT NULL DEFAULT 'auto'",
     "requested_program": "TEXT",
+    "requested_database": "TEXT",
     "backend_choice": "TEXT NOT NULL DEFAULT 'server'",
     "notify_to": "TEXT",
     "msa_alignment": "TEXT",
     "tree_newick": "TEXT",
     "homologs": "TEXT NOT NULL DEFAULT '[]'",
     "user_id": "INTEGER",
+    "strictness": "TEXT NOT NULL DEFAULT 'balanced'",
+    "cutoffs": "TEXT NOT NULL DEFAULT '{}'",
 }
 _SEARCH_COLUMNS: dict[str, str] = {
     "hits": "TEXT NOT NULL DEFAULT '[]'",
@@ -174,7 +183,7 @@ def init_db() -> None:
 
 def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
     job = dict(row)
-    for key, default in (("parameters", {}), ("hits", []), ("intent", {}), ("homologs", [])):
+    for key, default in (("parameters", {}), ("hits", []), ("intent", {}), ("homologs", []), ("cutoffs", {})):
         try:
             job[key] = json.loads(job.get(key) or json.dumps(default))
         except (json.JSONDecodeError, TypeError):
@@ -185,8 +194,10 @@ def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
 def create_job(*, question: str, raw_input: str, input_kind: str = "",
                whatsapp_user_id: str | None = None, source: str = "whatsapp",
                workflow_mode: str = "auto", requested_program: str | None = None,
+               requested_database: str | None = None,
                notify_to: str | None = None, backend_choice: str = "server",
-               user_id: int | None = None) -> dict[str, Any]:
+               user_id: int | None = None, strictness: str = "balanced",
+               cutoffs: dict[str, Any] | None = None) -> dict[str, Any]:
     job_id = f"WG-{uuid.uuid4().hex.upper()}"
     now = _now()
     with _lock, _connect() as conn:
@@ -194,11 +205,12 @@ def create_job(*, question: str, raw_input: str, input_kind: str = "",
             """
             INSERT INTO jobs (id, created_at, updated_at, status, question,
                               input_kind, raw_input, whatsapp_status, whatsapp_user_id,
-                              source, workflow_mode, requested_program, backend_choice, notify_to, user_id)
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?, ?, ?)
+                              source, workflow_mode, requested_program, requested_database, backend_choice, notify_to, user_id, strictness, cutoffs)
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, 'not_sent', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (job_id, now, now, question, input_kind, raw_input, whatsapp_user_id,
-             source, workflow_mode, requested_program, backend_choice, notify_to, user_id),
+             source, workflow_mode, requested_program, requested_database, backend_choice, notify_to, user_id, strictness,
+             json.dumps(cutoffs or {})),
         )
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return _row_to_job(row)
@@ -227,7 +239,7 @@ def list_jobs(limit: int = 50, user_id: int | None = None) -> list[dict[str, Any
 def update_job(job_id: str, **fields: Any) -> dict[str, Any] | None:
     if not fields:
         return get_job(job_id)
-    for key in ("parameters", "hits", "intent", "homologs"):
+    for key in ("parameters", "hits", "intent", "homologs", "cutoffs"):
         if key in fields and not isinstance(fields[key], str):
             fields[key] = json.dumps(fields[key])
     fields["updated_at"] = _now()
@@ -326,34 +338,6 @@ def claim_job(job_id: str) -> bool:
     return cur.rowcount == 1
 
 
-def related_jobs(job: dict, limit: int = 5, user_id: int | None = None) -> list[dict[str, Any]]:
-    """Earlier workflows related by accession or identical sequence.
-
-    Deterministic relevance (PRD Open question #5, website form): same
-    resolved accession, or the same normalised sequence. Newest first.
-    When user_id is given, only that user's workflows are returned.
-    """
-    clauses, params = [], []
-    if job.get("accession"):
-        clauses.append("accession = ?")
-        params.append(job["accession"])
-    if job.get("sequence"):
-        clauses.append("sequence = ?")
-        params.append(job["sequence"])
-    if not clauses:
-        return []
-    sql = ("SELECT * FROM jobs WHERE id != ? AND (" + " OR ".join(clauses) + ")")
-    args: list[Any] = [job["id"], *params]
-    if user_id is not None:
-        sql += " AND user_id = ?"
-        args.append(user_id)
-    sql += " ORDER BY created_at DESC LIMIT ?"
-    args.append(limit)
-    with _connect() as conn:
-        rows = conn.execute(sql, args).fetchall()
-    return [_row_to_job(r) for r in rows]
-
-
 def list_jobs_for_user(whatsapp_user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
@@ -446,6 +430,30 @@ def delete_session(token: str) -> None:
 def delete_expired_sessions(now_iso: str) -> None:
     with _lock, _connect() as conn:
         conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_iso,))
+
+
+def get_user_settings(user_id: int) -> dict[str, Any] | None:
+    """Stored customization profile for a user, or None if never saved."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT profile FROM user_settings WHERE user_id = ?", (user_id,)).fetchone()
+    if not row:
+        return None
+    try:
+        profile = json.loads(row[0] or "{}")
+    except (ValueError, TypeError):
+        return None
+    return profile if isinstance(profile, dict) else None
+
+
+def save_user_settings(user_id: int, profile: dict[str, Any]) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO user_settings (user_id, profile, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_id) DO UPDATE SET profile = excluded.profile, "
+            "updated_at = excluded.updated_at",
+            (user_id, json.dumps(profile), _now()),
+        )
 
 
 def adopt_orphan_jobs(user_id: int) -> int:

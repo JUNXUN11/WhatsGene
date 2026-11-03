@@ -15,8 +15,8 @@ class ModelError(RuntimeError):
     pass
 
 
-def completions_url() -> str:
-    base = (config.MUSE_BASE_URL or "").strip().rstrip("/")
+def completions_url(base_url: str | None = None) -> str:
+    base = (base_url or config.MUSE_BASE_URL or "").strip().rstrip("/")
     if not base:
         raise ModelError("MUSE_BASE_URL is not set.")
     if base.endswith("/chat/completions"):
@@ -24,18 +24,24 @@ def completions_url() -> str:
     return base + "/chat/completions"
 
 
-def chat_completion(*, system: str, user: str, max_tokens: int) -> dict[str, Any]:
-    """Return {"text": str, "usage": dict | None}. Raises ModelError."""
+def chat_completion(*, system: str, user: str, max_tokens: int,
+                    api_key: str | None = None, base_url: str | None = None,
+                    model: str | None = None) -> dict[str, Any]:
+    """Return {"text": str, "usage": dict | None}. Raises ModelError.
+
+    Per-user credentials (Settings) override the server env when given.
+    """
     import httpx
 
-    if not (config.MUSE_API_KEY or "").strip():
+    key = (api_key or config.MUSE_API_KEY or "").strip()
+    if not key:
         raise ModelError("MUSE_API_KEY is not set.")
     try:
         with httpx.Client(timeout=config.MODEL_TIMEOUT_SECONDS) as client:
             response = client.post(
-                completions_url(),
-                headers={"Authorization": f"Bearer {config.MUSE_API_KEY}"},
-                json={"model": config.MUSE_MODEL,
+                completions_url(base_url),
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": (model or config.MUSE_MODEL),
                       "messages": [{"role": "system", "content": system},
                                    {"role": "user", "content": user}],
                       "max_tokens": max_tokens,
