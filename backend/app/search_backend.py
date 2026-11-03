@@ -96,6 +96,12 @@ _LOCAL_DB_MAP = {
     "refseq_viral_genomic": "refseq_viral_genomic",
     "viral_genomic": "refseq_viral_genomic",
 }
+def local_database_name(database: str) -> str:
+    """The database LocalBlast really searches for a rules-engine name:
+    refseq_protein and nr are served from the swissprot copy (decision 001)."""
+    return _LOCAL_DB_MAP.get(database, database)
+
+
 # Databases tried, in order, by fetch_by_accession (protein first).
 _LOCAL_FETCH_STEMS = ("swissprot", "pdbaa", "refseq_viral_protein",
                       "16s_rrna", "fungi_its", "mito_genomic",
@@ -222,7 +228,8 @@ def build_blast_command(*, program: str, db_path: Path, query_fasta: Path,
     if program not in _LOCAL_PROGRAMS:
         raise SearchError(
             f"LocalBlast supports {list(_LOCAL_PROGRAMS)} only, not {program!r}. "
-            "Set SEARCH_BACKEND=ncbi for other programs.")
+            "Run this workflow with Real NCBI BLAST (New search -> More options), "
+            "or set SEARCH_BACKEND=ncbi.")
     cmd = [program, "-db", str(db_path), "-query", str(query_fasta),
            "-outfmt", "5", "-out", "-"]
     if evalue is not None:
@@ -428,7 +435,8 @@ class LocalBlast:
                 raise SearchError(
                     f"LocalBlast does not serve database {database!r} locally "
                     f"(serves: {', '.join(served)}). "
-                    "Set SEARCH_BACKEND=ncbi for other databases.")
+                    "Run this workflow with Real NCBI BLAST (New search -> More "
+                    "options), or set SEARCH_BACKEND=ncbi.")
             stem = entry["stem"]
         if not any(self._db_dir.glob(stem + ".*")):
             raise SearchError(

@@ -623,10 +623,24 @@ def _public_job(job: dict, user_id: int | None = None) -> dict:
     public["notify_configured"] = bool(job.get("notify_to") or job.get("whatsapp_user_id"))
     public["results_url"] = f"{config.FRONTEND_BASE_URL}/jobs/{job['id']}"
     backend_name = (job.get("parameters") or {}).get("backend", "ncbi")
-    history = "Job history is stored server-side; ask WhatsGene to 'forget my history' to delete it."
-    if backend_name == "local":
+    # Web workflows are deleted from their page; only WhatsApp has the
+    # 'forget my history' command.
+    if job.get("source") == "whatsapp":
+        history = "Job history is stored server-side; message 'forget my history' on WhatsApp to delete it."
+    else:
+        history = ("This workflow is stored in the results file on this machine; "
+                   "delete it from its page at any time.")
+    fetched_from_ncbi = any(s.get("step") == "fetch_accession"
+                            and "NCBI E-utilities" in (s.get("decision") or "")
+                            for s in public["step_log"])
+    if backend_name == "local" and fetched_from_ncbi:
         public["data_notice"] = (
-            "Your sequence was searched against a database on this server; "
+            "The accession ID was sent to NCBI only to fetch its sequence; the BLAST "
+            f"search runs on this machine and no sequence is sent to NCBI BLAST. {history}"
+        )
+    elif backend_name == "local":
+        public["data_notice"] = (
+            "Your sequence was searched against a database on this machine; "
             f"nothing was sent to NCBI. {history}"
         )
     elif backend_name == "fixture":

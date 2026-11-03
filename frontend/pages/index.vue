@@ -41,7 +41,12 @@ async function copyInstall() {
         <code class="mono">{{ installCmd }}</code>
         <button type="button" class="btn-copy" @click="copyInstall">{{ copied ? 'Copied ✓' : 'Copy' }}</button>
       </div>
-      <p class="hint">Needs Git, Python 3.12+, Node 20+ and NCBI BLAST+. Inside the app: Settings → Local BLAST setup → Run setup now.</p>
+      <ol class="install-steps">
+        <li><strong>Copy</strong> the command above.</li>
+        <li><strong>Open Terminal</strong> (Mac: press ⌘ Space, type Terminal), paste the command, and press Enter. The first run takes a few minutes.</li>
+        <li><strong>Your browser opens WhatsGene.</strong> Create your account, then press <em>Run setup now</em> to build the search database once.</li>
+      </ol>
+      <p class="hint">Keep Terminal open while you use WhatsGene; Ctrl+C stops it. Next time, run <code class="mono">cd ~/WhatsGene &amp;&amp; ./start</code>. Needs Git, Python 3.12+, Node 20+ and NCBI BLAST+ (Mac: <code class="mono">brew install blast</code>).</p>
       <div class="hero-grid">
         <div>
           <p class="lede">
@@ -145,6 +150,16 @@ async function copyInstall() {
   cursor: pointer;
   white-space: nowrap;
 }
+.install-steps {
+  margin: 12px 0 6px;
+  padding-left: 22px;
+  display: grid;
+  gap: 4px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.install-steps strong { color: var(--ink); }
 .btn-copy:hover {
   background: var(--accent-strong);
 }

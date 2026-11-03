@@ -30,7 +30,8 @@ The answer quotes only values from your stored results, or the answer states tha
 A short protein query gets the short-query profile without extra work from you.
 The lab case `PNLHGLFGRKTG` runs with E-value 200000, word size 2, and matrix PAM30.
 The page shows those values beside the standard values E-value 10, word size 3, and matrix BLOSUM62.
-A CDS subrange works too, in the form `NM_006744.4:84-689`.
+A CDS subrange works too, in the form `NM_006744.4:84-689`: WhatsGene fetches the record and searches bases 84 to 689 only.
+That CDS needs the nucleotide database `refseq_nucleotide`, so run it with the Real NCBI BLAST choice (see Step 5).
 
 ## What you need
 
@@ -48,6 +49,17 @@ brew install blast
 sudo apt-get install -y ncbi-blast+
 ```
 
+MAFFT is optional. With MAFFT on your machine, the Build MSA + tree button aligns in seconds and the sequences stay on your machine.
+Without MAFFT, the button uses the MAFFT service at EBI, which takes 1 to 3 minutes.
+
+```bash
+# Mac
+brew install mafft
+
+# Ubuntu
+sudo apt-get install -y mafft
+```
+
 ## Step 1: Get the code
 
 You run every command in this tutorial in a terminal.
@@ -55,7 +67,7 @@ The first command copies the code to your machine.
 The second command moves you into the new folder.
 
 ```bash
-git clone <REPO_URL> whatsgene
+git clone https://github.com/JUNXUN11/WhatsGene.git whatsgene
 cd whatsgene
 ```
 
@@ -63,7 +75,7 @@ Or paste this one line in a terminal (Mac or Linux) and skip to Step 4:
 it downloads the code, starts the tool, and opens your browser.
 
 ```bash
-curl -fsSL <REPO_URL_RAW>/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JUNXUN11/WhatsGene/main/install.sh | bash
 ```
 
 ## Step 2: Build the search database
@@ -163,8 +175,19 @@ Write the question `Identify this protein` and press Run.
 The workflow reaches the done status in seconds on a local database.
 In our test run, the top hit was `P68873` with E-value 6.55889e-106.
 The results page shows the top hit, the exact parameters, and the step log for the run.
-A RefSeq accession such as `NP_000509` is not in the SwissProt copy, so local mode cannot fetch that accession.
-For that case, paste the sequence text, or pick the real NCBI choice for that one workflow.
+A RefSeq accession such as `NP_000509` is not in the SwissProt copy.
+For such an accession, local mode fetches the sequence from NCBI E-utilities and then searches on your machine.
+Only the accession ID goes to NCBI; the results page says so.
+
+### Search the real NCBI BLAST
+
+Any workflow can run on the real NCBI BLAST service instead of your machine.
+Open More options on New search, set the search location to Real NCBI BLAST, and press Run.
+Try the CDS `NM_006744.4:84-689` with the question `Identify this protein`.
+The real NCBI choice runs every program and every NCBI database, for example `blastn` against `refseq_nucleotide`.
+The sequence goes to NCBI, and the results page says so.
+A search waits in the NCBI queue, so it can take minutes; you can close the page and come back.
+This choice needs `NCBI_EMAIL` in `backend/.env`, because NCBI asks every tool for a contact email.
 
 If the page does not load, make sure that `./start` still runs.
 If a search reports a missing database, make sure that `BLASTDB` names the folder from Step 2.
@@ -229,7 +252,8 @@ builds with `app` (`./start` sets this), so it opens straight on New search.
 In local mode, your sequence and your results stay on your machine.
 Three optional parts send data out, and each part is off or explicit.
 A workflow with the real NCBI choice sends the sequence to the NCBI public BLAST service.
-The Align button sends the collected sequences to the MAFFT service at EBI.
+An accession that is not in your local databases goes to NCBI E-utilities as an ID only, to fetch its sequence.
+Without MAFFT on your machine, the Align button sends the collected sequences to the MAFFT service at EBI.
 The Ask box sends stored result facts to the Muse endpoint only if `MODEL_ASK_ENABLED=true`, and the factory value is `false`.
 The WhatsApp notice sends a phone number and a summary to Meta only if you fill in the WhatsApp fields.
 
@@ -239,7 +263,8 @@ Local mode searches against the databases in your `BLASTDB` folder.
 Step 2 builds the SwissProt copy; the Library page builds small extras on top
 (PDB proteins, RefSeq viral proteins, 16S rRNA, fungi ITS, mitochondrion and viral
 genomes — each built with `makeblastdb` from NCBI sources).
-Local search runs `blastp` and `blastn`; `tblastn` and `blastx` need the real NCBI choice.
+Local search runs `blastp` and `blastn` against the databases in that folder.
+`tblastn`, `blastx`, and NCBI-only databases such as `est` and `refseq_nucleotide` need the real NCBI choice.
 WhatsApp outbound delivery waits for Meta business verification.
 The full science rules live in `docs/blast-rules.md`, and the product rules live in `docs/PRD.md`.
 

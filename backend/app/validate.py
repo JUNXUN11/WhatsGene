@@ -11,6 +11,10 @@ import re
 _DNA_CHARS = set("ACGTUN")
 _PROTEIN_CHARS = set("ACDEFGHIKLMNPQRSTVWY")
 _ACCESSION_RE = re.compile(r"^[A-Z]{1,3}_?\d+(\.\d+)?$")
+# UniProt's published accession format (P0DTC2, A0A023GPI8). Every form
+# has digits, so a raw sequence (letters only) can never match it.
+_UNIPROT_RE = re.compile(
+    r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})(\.\d+)?$")
 
 
 class ValidationError(ValueError):
@@ -18,7 +22,8 @@ class ValidationError(ValueError):
 
 
 def looks_like_accession(text: str) -> bool:
-    return bool(_ACCESSION_RE.match(text.strip().upper()))
+    candidate = text.strip().upper()
+    return bool(_ACCESSION_RE.match(candidate) or _UNIPROT_RE.match(candidate))
 
 
 _SUBRANGE_RE = re.compile(r"^([A-Z]{1,3}_?\d+(?:\.\d+)?):(\d+)-(\d+)$")
