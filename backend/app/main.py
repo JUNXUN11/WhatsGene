@@ -368,7 +368,8 @@ def create_job(body: JobCreate, user: dict = Depends(current_user)) -> dict:
                     status_code=503,
                     detail=f"Local database {requested_db} is not built on this "
                            "machine yet. Build it first (see README), or clear the database.")
-    if db.get_usage(user["id"], db.today_iso(), "jobs") >= config.JOBS_DAILY_LIMIT:
+    if config.JOBS_DAILY_LIMIT and \
+            db.get_usage(user["id"], db.today_iso(), "jobs") >= config.JOBS_DAILY_LIMIT:
         raise HTTPException(status_code=429,
                             detail=f"Daily search limit reached ({config.JOBS_DAILY_LIMIT}/day).")
     notify = (body.whatsapp_number or "").strip() or None

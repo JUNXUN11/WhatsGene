@@ -17,15 +17,20 @@ class Base(unittest.TestCase):
         self._old_db = config.DATABASE_PATH
         self._old_user = config.AUTH_USERNAME
         self._old_pw = config.AUTH_PASSWORD
+        self._old_cookie = config.COOKIE_SAMESITE, config.COOKIE_SECURE
         config.DATABASE_PATH = Path(self._tmp.name) / "test.db"
         config.AUTH_USERNAME = "reviewer"
         config.AUTH_PASSWORD = "s3cret-review"
+        # The test client speaks plain http: a split-hosting backend/.env
+        # (SameSite=None forces Secure) would drop the session cookie.
+        config.COOKIE_SAMESITE, config.COOKIE_SECURE = "lax", False
         db.init_db()
 
     def tearDown(self) -> None:
         config.DATABASE_PATH = self._old_db
         config.AUTH_USERNAME = self._old_user
         config.AUTH_PASSWORD = self._old_pw
+        config.COOKIE_SAMESITE, config.COOKIE_SECURE = self._old_cookie
         self._tmp.cleanup()
 
 

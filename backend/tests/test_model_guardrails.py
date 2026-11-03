@@ -149,6 +149,19 @@ class TestJobsQuota(Base):
         finally:
             config.SEARCH_BACKEND, config.FIXTURE_CASE = old_backend, old_case
 
+    def test_zero_limit_means_no_cap(self):
+        from app.main import JobCreate, create_job
+
+        old_backend, old_case = config.SEARCH_BACKEND, config.FIXTURE_CASE
+        config.SEARCH_BACKEND, config.FIXTURE_CASE = "fixture", ""
+        config.JOBS_DAILY_LIMIT = 0
+        try:
+            user = {"id": self.user_id, "username": "owner"}
+            for _ in range(3):
+                create_job(JobCreate(sequence="PNLHGLFGRKTG", question="q"), user=user)
+        finally:
+            config.SEARCH_BACKEND, config.FIXTURE_CASE = old_backend, old_case
+
 
 if __name__ == "__main__":
     unittest.main()

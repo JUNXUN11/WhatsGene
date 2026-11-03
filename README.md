@@ -252,3 +252,7 @@ PSI-BLAST, PHI-BLAST, HMMER, Tajima tests, and bootstrap values are not in the t
 The MSA and tree rules come from the course decks, and the tool invents no rule for those steps.
 User accounts for teams are not in the tool, and the single login user guards the demo.
 The decision record for the local tool direction is `docs/decisions/008-local-tool-own-server.md`.
+
+## License
+
+WhatsGene is open source under the MIT License. See `LICENSE`.

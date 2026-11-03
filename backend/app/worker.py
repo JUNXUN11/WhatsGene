@@ -2,9 +2,11 @@
 
 Web and WhatsApp submissions only create a queued job row; this worker
 claims queued workflows and runs them in a thread pool, so several jobs
-search in parallel and nobody waits on a request. NcbiRemote runs are
-serialised (one in-flight RID etiquette); local/fixture runs in parallel
-up to MAX_CONCURRENT_JOBS. On completion the worker WhatsApps the user.
+search in parallel and nobody waits on a request. Local/fixture runs
+share a pool of MAX_CONCURRENT_JOBS threads. NcbiRemote runs get their
+own one-thread lane (one in-flight RID etiquette), so a workflow stuck
+in the NCBI queue never holds a slot that a local search needs. On
+completion the worker WhatsApps the user.
 
 Run standalone:  python -m app.worker
 """
@@ -17,9 +19,10 @@ from datetime import datetime, timezone
 
 from . import config, db, whatsapp_client
 from .agent_loop import process_job as _run_loop
-from .search_backend import get_backend, get_backend_for_choice
+from .search_backend import SearchError, get_backend, get_backend_for_choice
 
 _executor: ThreadPoolExecutor | None = None
+_ncbi_executor: ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
 _ncbi_lock = threading.Lock()
 _inflight: set[str] = set()
@@ -34,6 +37,16 @@ def _get_executor() -> ThreadPoolExecutor:
                 max_workers=max(1, config.MAX_CONCURRENT_JOBS),
                 thread_name_prefix="whatsgene-job")
         return _executor
+
+
+def _get_ncbi_executor() -> ThreadPoolExecutor:
+    """One thread: NCBI workflows queue here, not in the local pool."""
+    global _ncbi_executor
+    with _executor_lock:
+        if _ncbi_executor is None:
+            _ncbi_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="whatsgene-ncbi")
+        return _ncbi_executor
 
 
 def notify_job_done(job: dict) -> dict:
@@ -77,12 +90,25 @@ def run_job(job: dict, backend=None) -> dict:
 
 
 def submit_async(job: dict, backend=None) -> bool:
-    """Queue a workflow on the pool. False if it is already in flight."""
+    """Queue a workflow on its lane. False if in flight or it cannot run.
+
+    A backend that cannot be built (no BLASTDB folder, no NCBI_EMAIL)
+    fails the workflow with that reason instead of leaving it queued.
+    """
     with _inflight_lock:
         if job["id"] in _inflight:
             return False
         _inflight.add(job["id"])
-    _get_executor().submit(run_job, job, backend)
+    try:
+        backend = backend_for_job(job, backend)
+    except SearchError as exc:
+        with _inflight_lock:
+            _inflight.discard(job["id"])
+        notify_job_done(db.update_job(job["id"], status="failed", error=str(exc),
+                                      summary=str(exc)) or job)
+        return False
+    pool = _get_ncbi_executor() if backend.name == "ncbi" else _get_executor()
+    pool.submit(run_job, job, backend)
     return True
 
 

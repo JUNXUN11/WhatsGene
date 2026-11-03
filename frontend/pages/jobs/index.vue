@@ -69,7 +69,7 @@ onUnmounted(() => {
       <h1>Workflows</h1>
       <NuxtLink to="/new" class="btn">+ New search</NuxtLink>
     </div>
-    <p class="lede">Every queued, running and finished search. Statuses refresh live — a notification pops up here when each one finishes.</p>
+    <p class="lede">Every queued, running and finished search. Statuses refresh live — a notification pops up here when each one finishes, and your browser notifies you too if this tab is in the background.</p>
 
     <div v-if="!error && jobs.length" class="toolbar">
       <span class="toolbar-count">{{ jobs.length }} workflow{{ jobs.length === 1 ? '' : 's' }} · auto-refreshing every 5s</span>

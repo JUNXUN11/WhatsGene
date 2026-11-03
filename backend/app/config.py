@@ -71,7 +71,9 @@ LIBRARY_DIR: Path = Path(_env("WHATSGENE_LIBRARY_DIR",
 # --- Model Ask guardrails (decision 007): quotas, cache, kill switch ---
 MODEL_ASK_ENABLED: bool = _env("MODEL_ASK_ENABLED", "false").lower() in ("1", "true", "yes")
 ASK_DAILY_LIMIT: int = int(_env("ASK_DAILY_LIMIT", "20") or "20")
-JOBS_DAILY_LIMIT: int = int(_env("JOBS_DAILY_LIMIT", "10") or "10")
+# Searches per user per day. 0 (default) means no cap: a local tool never
+# refuses its owner. Shared servers (docker-compose) set a cap.
+JOBS_DAILY_LIMIT: int = int(_env("JOBS_DAILY_LIMIT", "0") or "0")
 MODEL_MAX_TOKENS: int = int(_env("MODEL_MAX_TOKENS", "400") or "400")
 MODEL_TIMEOUT_SECONDS: float = float(_env("MODEL_TIMEOUT_SECONDS", "60") or "60")
 
