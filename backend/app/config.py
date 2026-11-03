@@ -55,6 +55,14 @@ PUBLIC_BASE_URL: str = _env("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("
 FRONTEND_BASE_URL: str = _env("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
 DATABASE_PATH: Path = Path(_env("DATABASE_PATH", "./whatsgene.db"))
 
+# --- File-drop library (app/library.py) ---
+# Users drop messy files into the inbox; confirmed sorting copies them
+# into the library, where they can become queries or custom databases.
+INBOX_DIR: Path = Path(_env("WHATSGENE_INBOX_DIR",
+                            str(Path.home() / "WhatsGene" / "inbox"))).expanduser()
+LIBRARY_DIR: Path = Path(_env("WHATSGENE_LIBRARY_DIR",
+                              str(Path.home() / "WhatsGene" / "library"))).expanduser()
+
 # --- Model Ask guardrails (decision 007): quotas, cache, kill switch ---
 MODEL_ASK_ENABLED: bool = _env("MODEL_ASK_ENABLED", "false").lower() in ("1", "true", "yes")
 ASK_DAILY_LIMIT: int = int(_env("ASK_DAILY_LIMIT", "20") or "20")

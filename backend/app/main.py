@@ -18,8 +18,10 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import agent, auth, chat, config, db, whatsapp_client, worker
-from .search_backend import SearchError, get_backend
+from . import (agent, auth, chat, config, db, library,
+               settings as user_settings, whatsapp_client, worker)
+from .search_backend import (SearchError, get_backend, get_backend_for_choice,
+                             local_database_catalog, local_database_entry)
 
 
 @asynccontextmanager
@@ -53,6 +55,7 @@ class JobCreate(BaseModel):
     question: str = Field(default="", description="Plain-language question, e.g. 'Is there a related gene in nematodes?'")
     workflow_mode: str = Field(default="auto", description="auto | single | all")
     search_backend: str = Field(default="server", description="server | local | ncbi — where this workflow searches")
+    database: str | None = Field(default=None, description="Canonical local database name (e.g. pdbaa, 16s_rrna); empty = rules engine chooses")
     program: str | None = Field(default=None, description="Program for workflow_mode=single, e.g. blastp")
     whatsapp_number: str | None = Field(default=None, description="Optional WhatsApp number for the done notification")
     source: str = Field(default="web")
@@ -65,6 +68,40 @@ class AskBody(BaseModel):
 class LoginBody(BaseModel):
     username: str
     password: str
+
+
+class SettingsBody(BaseModel):
+    lab_name: str = ""
+    default_organism: str = ""
+    default_backend: str = "server"
+    strictness: str = "balanced"
+    cutoff_mode: str = "standard"
+    cutoffs: dict | None = None
+    muse_api_key: str = ""
+    clear_muse_key: bool = False
+    muse_base_url: str = ""
+    muse_model: str = ""
+
+
+class AiSetupBody(BaseModel):
+    database: str = "swissprot"
+    message: str = ""
+
+
+class LibrarySortBody(BaseModel):
+    items: list[dict] = Field(default_factory=list,
+                              description="[{path, category}] confirmed by the user")
+
+
+class LibraryBuildBody(BaseModel):
+    root: str = Field(default="library", description="inbox | library")
+    path: str = Field(description="File path as returned by GET /library")
+    name: str = Field(description="Custom database name, e.g. worm_globins")
+
+
+class TaxonBuildBody(BaseModel):
+    organism: str = Field(description="Organism or taxon, e.g. C. elegans")
+    name: str = Field(description="Custom database name, e.g. celegans_proteins")
 
 
 def current_user(request: Request) -> dict:
@@ -123,6 +160,57 @@ def me(request: Request) -> dict:
     return {"authenticated": True, "username": user["username"]}
 
 
+@app.get("/settings")
+def get_settings(user: dict = Depends(current_user)) -> dict:
+    """The caller's customization profile, presets, and setup status."""
+    return user_settings.public_settings(user["id"])
+
+
+@app.put("/settings")
+def put_settings(body: SettingsBody, user: dict = Depends(current_user)) -> dict:
+    try:
+        saved = user_settings.save_settings(user["id"], body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"settings": saved, **user_settings.muse_key_hint(user["id"])}
+
+
+@app.post("/settings/ai-setup")
+def ai_setup(body: AiSetupBody, user: dict = Depends(current_user)) -> dict:
+    """Muse-guided local BLAST setup (demo: plan + explanation, no writes).
+
+    With the user's own Muse key, a live model explains the deterministic
+    plan; without one (or on any model failure) the scripted demo reply is
+    returned. Downloads/builds are never executed from here.
+    """
+    plan = user_settings.setup_plan(body.database or "swissprot")
+    reply = user_settings.setup_assistant_reply(
+        database_choice=plan["database"], question=body.message or "", plan=plan)
+    mode = "demo"
+    key = user_settings.get_muse_key(user["id"])
+    if key:
+        profile = user_settings.get_settings(user["id"])
+        from .model_client import ModelError, chat_completion
+
+        facts = "\n".join(
+            f"- {s['title']}: {s['status']} — {s['detail']}" for s in plan["steps"])
+        try:
+            result = chat_completion(
+                system=("You are the WhatsGene setup assistant for wet-lab scientists. "
+                        "Explain the given local BLAST setup plan in plain language, short "
+                        "sentences. Use only the facts given; never invent commands, "
+                        "thresholds, or results. Say clearly which steps are demo-only."),
+                user=f"SETUP FACTS:\n{facts}\n\nUSER MESSAGE: {(body.message or 'Help me set up local BLAST.')[:500]}",
+                max_tokens=config.MODEL_MAX_TOKENS, api_key=key,
+                base_url=profile.get("muse_base_url") or None,
+                model=profile.get("muse_model") or None)
+            reply = result["text"]
+            mode = "live"
+        except ModelError:
+            mode = "demo"  # scripted reply already prepared above
+    return {"reply": reply, "mode": mode, "plan": plan}
+
+
 @app.get("/privacy")
 def privacy() -> dict:
     """Public privacy policy (Meta app publishing requirement)."""
@@ -143,6 +231,70 @@ def privacy() -> dict:
     }
 
 
+def _library_root(root: str):
+    if root == "inbox":
+        return library.inbox_dir()
+    if root == "library":
+        return library.library_dir()
+    raise HTTPException(status_code=422, detail="root must be inbox or library.")
+
+
+@app.get("/library")
+def get_library(user: dict = Depends(current_user)) -> dict:
+    """Inbox inventory + sorted library for the file-drop page."""
+    return {
+        "inbox_dir": str(library.inbox_dir()),
+        "library_dir": str(library.library_dir()),
+        "inbox": library.inventory(),
+        "library": library.library_inventory(),
+    }
+
+
+@app.post("/library/sort")
+def sort_library(body: LibrarySortBody, user: dict = Depends(current_user)) -> dict:
+    """Copy user-confirmed inbox files into the library. Never moves."""
+    try:
+        return library.sort_files(body.items)
+    except (ValueError, library.LibraryError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/library/build-database")
+def build_database(body: LibraryBuildBody, user: dict = Depends(current_user)) -> dict:
+    """Build a small custom BLAST database from one sorted FASTA file."""
+    try:
+        source = library.resolve_within(_library_root(body.root), body.path)
+        return library.build_custom_database(source, body.name)
+    except (ValueError, library.LibraryError, SearchError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/library/build-from-taxon")
+def build_from_taxon(body: TaxonBuildBody, user: dict = Depends(current_user)) -> dict:
+    """Build a small custom database: one taxon's SwissProt subset."""
+    try:
+        return library.build_database_from_taxon(body.organism, body.name)
+    except (ValueError, library.LibraryError, SearchError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/library/query-text")
+def library_query_text(root: str = "library", path: str = "",
+                       user: dict = Depends(current_user)) -> dict:
+    """First searchable record of a sorted file, for one-click search."""
+    try:
+        source = library.resolve_within(_library_root(root), path)
+        return {"text": library.read_query_text(source)}
+    except (ValueError, library.LibraryError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/databases")
+def list_databases(user: dict = Depends(current_user)) -> dict:
+    """Local databases a workflow can name, with built/not-built status."""
+    return {"databases": local_database_catalog()}
+
+
 @app.post("/jobs", status_code=201)
 def create_job(body: JobCreate, user: dict = Depends(current_user)) -> dict:
     """Queue a workflow and return at once; the worker runs it."""
@@ -152,15 +304,49 @@ def create_job(body: JobCreate, user: dict = Depends(current_user)) -> dict:
     mode = (body.workflow_mode or "auto").lower()
     if mode not in ("auto", "single", "all"):
         raise HTTPException(status_code=422, detail="workflow_mode must be auto, single, or all.")
+    requested_db = (body.database or "").strip() or None
+    if requested_db:
+        entry = local_database_entry(requested_db)
+        if entry is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown local database {requested_db!r}. "
+                       "Choose one from GET /databases, or leave it automatic.")
+        if mode == "all":
+            raise HTTPException(
+                status_code=422,
+                detail="A specific database cannot be combined with All programs. "
+                       "Choose Auto or one program with that database.")
+        try:
+            backend_name = get_backend_for_choice(body.search_backend or "server").name
+        except SearchError:
+            backend_name = None  # existing post-queue check reports config errors
+        if backend_name == "ncbi":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Local database {requested_db} needs the Local BLAST "
+                       "search location. Choose Local BLAST, or clear the database.")
+        if backend_name == "local":
+            ready = {d["name"]: d["ready"] for d in local_database_catalog()}
+            if not ready.get(requested_db):
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Local database {requested_db} is not built on this "
+                           "machine yet. Build it first (see README), or clear the database.")
     if db.get_usage(user["id"], db.today_iso(), "jobs") >= config.JOBS_DAILY_LIMIT:
         raise HTTPException(status_code=429,
                             detail=f"Daily search limit reached ({config.JOBS_DAILY_LIMIT}/day).")
     notify = (body.whatsapp_number or "").strip() or None
+    # Snapshot the caller's strictness preset onto the job: later Settings
+    # changes must not rewrite what a running/finished workflow used.
+    profile = user_settings.get_settings(user["id"])
     job = db.create_job(question=body.question or "", raw_input=raw,
                         whatsapp_user_id=notify, source=body.source or "web",
                         workflow_mode=mode, requested_program=body.program,
+                        requested_database=requested_db,
                         notify_to=notify, backend_choice=(body.search_backend or "server"),
-                        user_id=user["id"])
+                        user_id=user["id"], strictness=profile["strictness"],
+                        cutoffs=user_settings.job_cutoffs(profile))
     db.bump_usage(user["id"], db.today_iso(), "jobs")
     try:
         backend = worker.backend_for_job(job)
@@ -232,9 +418,13 @@ def ask_job(job_id: str, body: AskBody, user: dict = Depends(current_user)) -> d
     """Grounded Q&A over this workflow's stored results (web Ask box)."""
     job = _owned_job(job_id, user)
     try:
+        profile = user_settings.get_settings(user["id"])
         answer = agent.answer_followup(job=job, question=body.question,
                                        searches=db.get_searches(job_id),
-                                       user_id=user["id"])
+                                       user_id=user["id"],
+                                       muse_api_key=user_settings.get_muse_key(user["id"]),
+                                       muse_base_url=profile.get("muse_base_url") or None,
+                                       muse_model=profile.get("muse_model") or None)
     except agent.QuotaError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     if answer == "__FORGET_HISTORY__":
@@ -248,11 +438,6 @@ def _public_job(job: dict, user_id: int | None = None) -> dict:
               if k not in ("whatsapp_user_id", "notify_to", "user_id")}
     public["step_log"] = db.get_step_log(job["id"])
     public["searches"] = db.get_searches(job["id"])
-    public["related_jobs"] = [
-        {"id": r["id"], "question": r.get("question"), "status": r.get("status"),
-         "outcome": r.get("outcome"), "program": r.get("program"),
-         "created_at": r.get("created_at")}
-        for r in db.related_jobs(job, user_id=user_id)]
     public["notify_configured"] = bool(job.get("notify_to") or job.get("whatsapp_user_id"))
     public["results_url"] = f"{config.FRONTEND_BASE_URL}/jobs/{job['id']}"
     backend_name = (job.get("parameters") or {}).get("backend", "ncbi")

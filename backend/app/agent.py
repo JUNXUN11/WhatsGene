@@ -128,19 +128,25 @@ def _stored_facts(*, job: dict, searches: list[dict], deterministic: str) -> str
 
 def answer_followup(*, job: dict | None, question: str,
                     searches: list[dict] | None = None,
-                    user_id: int | None = None) -> str:
+                    user_id: int | None = None,
+                    muse_api_key: str | None = None,
+                    muse_base_url: str | None = None,
+                    muse_model: str | None = None) -> str:
     """Grounded follow-up: stored results + rules only (blast-rules §12).
 
     With MODEL_ASK_ENABLED and a logged-in web user, a live model call
     rephrases the stored facts — quota-capped, cached per (job, question),
-    logged, and always falling back to the deterministic answer.
+    logged, and always falling back to the deterministic answer. A key the
+    user saved in Settings counts as their own opt-in (their key, their
+    quota on the provider side); the deterministic answer still leads.
     """
     from .qa import answer_question
 
     deterministic = answer_question(job=job, searches=searches, question=question)
     if deterministic == "__FORGET_HISTORY__":
         return deterministic
-    if not config.MODEL_ASK_ENABLED or not (config.MUSE_API_KEY or "").strip():
+    user_key = (muse_api_key or "").strip()
+    if not user_key and not (config.MODEL_ASK_ENABLED and (config.MUSE_API_KEY or "").strip()):
         return deterministic
     if user_id is None or not job or not job.get("id"):
         return deterministic  # WhatsApp path has no web user: deterministic only
@@ -158,7 +164,9 @@ def answer_followup(*, job: dict | None, question: str,
     started = time.perf_counter()
     try:
         result = model_client.chat_completion(
-            system=ASK_SYSTEM, user=prompt, max_tokens=config.MODEL_MAX_TOKENS)
+            system=ASK_SYSTEM, user=prompt, max_tokens=config.MODEL_MAX_TOKENS,
+            api_key=user_key or None, base_url=muse_base_url or None,
+            model=muse_model or None)
     except ModelError as exc:
         db.log_model_call(user_id=user_id, job_id=job["id"], kind="ask",
                           prompt_chars=len(prompt),

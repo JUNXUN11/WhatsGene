@@ -303,16 +303,6 @@ const suggestions = [
         </div>
       </template>
 
-      <template v-if="job.related_jobs && job.related_jobs.length">
-        <h2>Related earlier workflows</h2>
-        <p class="hint">Same accession or same sequence as an earlier run — your research trail, stored server-side.</p>
-        <div v-for="r in job.related_jobs" :key="r.id" class="card" style="margin: 8px 0; padding: 12px 16px;">
-          <NuxtLink :to="`/jobs/${r.id}`" style="font-weight: 600; text-decoration: none;">{{ r.id }}</NuxtLink>
-          <span class="status-pill" :class="`status-${r.status}`" style="margin-left: 8px;">{{ r.status }}</span>
-          <span style="font-size: 13px; color: var(--muted); margin-left: 8px;">{{ [r.program, r.outcome].filter(Boolean).join(' · ') }}<span v-if="r.question && (r.program || r.outcome)"> · </span><span v-if="r.question">“{{ r.question }}”</span></span>
-        </div>
-      </template>
-
       <template v-if="job.status === 'done' || job.msa_alignment">
       <h2>Alignment and tree</h2>
       <p class="hint">From the confirmed homologs of this workflow: MAFFT alignment, then a neighbor-joining tree with Poisson-corrected distances after complete deletion of gap columns.</p>
@@ -374,9 +364,9 @@ const suggestions = [
 
 <style scoped>
 .seqblock {
-  background: #101613;
-  color: #d6e4da;
-  border: 1px solid #101613;
+  background: #141c26;
+  color: #d5e0ee;
+  border: 1px solid #141c26;
   border-radius: 10px;
   padding: 14px 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

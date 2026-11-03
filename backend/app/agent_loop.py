@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from . import agent, config, db, rules_engine
+from . import agent, config, db, rules_engine, settings as user_settings
 from .blast_params import parameters_for
 from .search_backend import SearchBackend, SearchError
 from .classify import classify_hits, flag_unexpected_taxa
@@ -127,7 +127,8 @@ def process_job(job: dict, backend: SearchBackend,
     try:
         plan = rules_engine.plan_programs(
             intent=intent, detected_type=detected, mode=mode,
-            requested_program=job.get("requested_program"))
+            requested_program=job.get("requested_program"),
+            requested_database=job.get("requested_database"))
     except ValueError as exc:
         _log(job_id, step="choose_search", observation=f"mode={mode}",
              decision="fail job", reason=str(exc))
@@ -139,6 +140,12 @@ def process_job(job: dict, backend: SearchBackend,
          observation=f"intent goal={intent.get('goal')}, target={intent.get('target_organism')}, detected={detected}",
          decision=f"{choice['program']} / {choice['database']}",
          reason=f"{choice['reason']} [{choice['rule']}]")
+    if job.get("requested_database"):
+        _log(job_id, step="database_choice",
+             observation=f"User selected local database {job['requested_database']}",
+             decision=f"search {choice['program']} / {choice['database']}",
+             reason="Explicit database choice from the search form; "
+                    "program and database type validated in code.")
     if len(plan) > 1:
         _log(job_id, step="plan_workflow",
              observation=f"mode={mode}: " + ", ".join(f"{p['program']}/{p['database']}" for p in plan),
@@ -164,8 +171,13 @@ def process_job(job: dict, backend: SearchBackend,
                               query_length=len(sequence),
                               organism_filter=spec.get("organism_filter"),
                               exclude_organism=spec.get("exclude_organism"))
+        # Owner's Settings preset caps the submission threshold only;
+        # significance classification (blast-rules §7) is unchanged.
+        base = user_settings.apply_strictness(base, job.get("strictness"))
         return {"backend": backend.name, **base, "kind": kind,
                 "rationale": spec["reason"], "rule": spec["rule"],
+                "requested_database": job.get("requested_database"),
+                "classification_cutoffs": job.get("cutoffs") or {"mode": "standard"},
                 "deviation_applied": applied_deviation}
 
     primary_params = params_for_spec(choice, "primary")
@@ -232,7 +244,7 @@ def process_job(job: dict, backend: SearchBackend,
             last_error = str(exc)
             return None
         hits = flag_unexpected_taxa(
-            classify_hits(_with_coverage(raw_hits, len(sequence))),
+            classify_hits(_with_coverage(raw_hits, len(sequence)), job.get("cutoffs") or None),
             query_organism=query_organism or "", query_annotation=query_annotation)
         db.complete_search(search_id, hits=hits, status="done")
         successful_searches += 1
@@ -258,7 +270,13 @@ def process_job(job: dict, backend: SearchBackend,
                 break
             recip_params = {**base_params, "kind": "reciprocal",
                             "candidate_accession": candidate.get("accession", ""),
-                            "organism_filter": query_organism}
+                            # Local organism scoping exists only for swissprot;
+                            # elsewhere the searched database is the scope.
+                            # Remote/fixture reciprocal searches keep targeting
+                            # the query organism (blast-rules §8).
+                            "organism_filter": (query_organism
+                                                if backend.name != "local"
+                                                or spec["database"] == "swissprot" else None)}
             try:
                 recip_rid = backend.submit(
                     sequence=str(candidate.get("sequence", sequence)), program=spec["program"],
@@ -279,7 +297,7 @@ def process_job(job: dict, backend: SearchBackend,
                      decision="try next candidate",
                      reason="Reciprocal search did not complete; verification cannot confirm this candidate.")
                 continue
-            reciprocal_hits = classify_hits(_with_coverage(backend.fetch_results(recip_rid), len(sequence)))
+            reciprocal_hits = classify_hits(_with_coverage(backend.fetch_results(recip_rid), len(sequence)), job.get("cutoffs") or None)
             db.complete_search(recip_id, hits=reciprocal_hits, status="done")
             result = verify_candidate(
                 candidate=candidate, reciprocal_hits=reciprocal_hits,

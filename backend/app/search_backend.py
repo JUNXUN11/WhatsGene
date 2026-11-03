@@ -81,7 +81,119 @@ _LOCAL_PROGRAMS = ("blastp", "blastn")
 # Rules-engine protein databases served by the local swissprot copy.
 # The step log and job parameters always record backend=local so the
 # results page never claims a search ran on the named remote database.
-_LOCAL_DB_MAP = {"swissprot": "swissprot", "refseq_protein": "swissprot", "nr": "swissprot"}
+# Extra entries are NCBI-sourced databases built locally with makeblastdb
+# from FASTA (NCBI prebuilt files do not open on arm64; decision 002):
+# pdbaa + RefSeq viral protein (blastp), 16S rRNA + fungi ITS +
+# mitochondrion + viral genomes (blastn). Files live as <stem>.* in $BLASTDB.
+_LOCAL_DB_MAP = {
+    "swissprot": "swissprot", "refseq_protein": "swissprot", "nr": "swissprot",
+    "pdbaa": "pdbaa", "pdb_protein": "pdbaa",
+    "refseq_viral_protein": "refseq_viral_protein",
+    "viral_protein": "refseq_viral_protein",
+    "16s_rrna": "16s_rrna", "16S_ribosomal_RNA": "16s_rrna",
+    "fungi_its": "fungi_its", "ITS_RefSeq_Fungi": "fungi_its",
+    "mito_genomic": "mito_genomic", "mito": "mito_genomic",
+    "refseq_viral_genomic": "refseq_viral_genomic",
+    "viral_genomic": "refseq_viral_genomic",
+}
+# Databases tried, in order, by fetch_by_accession (protein first).
+_LOCAL_FETCH_STEMS = ("swissprot", "pdbaa", "refseq_viral_protein",
+                      "16s_rrna", "fungi_its", "mito_genomic",
+                      "refseq_viral_genomic")
+
+# User-selectable local databases (canonical name -> catalog entry).
+# `name` is what jobs store and the form offers; aliases in _LOCAL_DB_MAP
+# resolve to the same stem but are not offered as separate choices.
+LOCAL_DATABASE_CATALOG: list[dict] = [
+    {"name": "swissprot", "stem": "swissprot", "dbtype": "protein",
+     "label": "SwissProt — curated proteins",
+     "description": "575k curated UniProt proteins. Default local copy."},
+    {"name": "pdbaa", "stem": "pdbaa", "dbtype": "protein",
+     "label": "PDB proteins (pdbaa)",
+     "description": "Proteins with known 3D structures, from NCBI pdbaa."},
+    {"name": "refseq_viral_protein", "stem": "refseq_viral_protein", "dbtype": "protein",
+     "label": "RefSeq viral proteins",
+     "description": "All RefSeq viral proteins, including HIV-1 pol."},
+    {"name": "16s_rrna", "stem": "16s_rrna", "dbtype": "nucleotide",
+     "label": "16S rRNA — bacteria and archaea",
+     "description": "Type-strain 16S sequences for bacterial identification."},
+    {"name": "fungi_its", "stem": "fungi_its", "dbtype": "nucleotide",
+     "label": "Fungi ITS",
+     "description": "Fungal internal transcribed spacer reference sequences."},
+    {"name": "mito_genomic", "stem": "mito_genomic", "dbtype": "nucleotide",
+     "label": "Mitochondrion genomes",
+     "description": "RefSeq mitochondrial genomes across species."},
+    {"name": "refseq_viral_genomic", "stem": "refseq_viral_genomic", "dbtype": "nucleotide",
+     "label": "RefSeq viral genomes",
+     "description": "RefSeq viral reference genomes."},
+]
+
+
+def _custom_registry_path(db_dir: Path) -> Path:
+    return db_dir / "custom_databases.json"
+
+
+def load_custom_databases(db_dir: Path | str | None = None) -> list[dict]:
+    """Custom databases registered in $BLASTDB/custom_databases.json."""
+    import json
+
+    try:
+        root = Path(db_dir) if db_dir else resolve_blast_db_dir()
+    except SearchError:
+        return []
+    path = _custom_registry_path(root)
+    if not path.is_file():
+        return []
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get("name") and row.get("stem") \
+                and row.get("dbtype") in ("protein", "nucleotide"):
+            out.append({**row, "custom": True})
+    return out
+
+
+def register_custom_database(entry: dict, db_dir: Path | str | None = None) -> dict:
+    """Add or replace one custom database in the registry. Returns it."""
+    import json
+
+    root = Path(db_dir) if db_dir else resolve_blast_db_dir()
+    rows = [r for r in load_custom_databases(root) if r["name"] != entry["name"]]
+    rows.append({k: entry[k] for k in
+                 ("name", "stem", "dbtype", "label", "description") if k in entry} |
+                {k: entry[k] for k in ("source", "built_at", "sequence_count") if k in entry})
+    _custom_registry_path(root).write_text(
+        json.dumps(rows, indent=1), encoding="utf-8")
+    return load_custom_databases(root)[-1] if rows else dict(entry)
+
+
+def local_database_entry(name: str | None,
+                         db_dir: Path | str | None = None) -> dict | None:
+    """Catalog entry for a canonical local database name, or None."""
+    wanted = (name or "").strip()
+    for entry in LOCAL_DATABASE_CATALOG:
+        if entry["name"] == wanted:
+            return entry
+    for entry in load_custom_databases(db_dir):
+        if entry["name"] == wanted:
+            return entry
+    return None
+
+
+def local_database_catalog(db_dir: Path | str | None = None) -> list[dict]:
+    """Catalog with a `ready` flag from files present in $BLASTDB."""
+    try:
+        root = Path(db_dir) if db_dir else resolve_blast_db_dir()
+    except SearchError:
+        root = None
+    out = []
+    for entry in [*LOCAL_DATABASE_CATALOG, *load_custom_databases(root)]:
+        ready = bool(root and any(root.glob(entry["stem"] + ".*")))
+        out.append({**entry, "ready": ready})
+    return out
 
 
 def resolve_blast_db_dir() -> Path:
@@ -293,7 +405,8 @@ def parse_blastdbcmd_fasta(text: str) -> dict:
 
 
 class LocalBlast:
-    """Default backend: BLAST+ binaries against a local swissprot copy.
+    """Default backend: BLAST+ binaries against local databases in $BLASTDB
+    (swissprot copy plus the NCBI-built databases in _LOCAL_DB_MAP).
 
     Searches run synchronously in submit(); poll() only reports the
     stored outcome. Fully offline once BLAST+ and $BLASTDB exist.
@@ -307,12 +420,23 @@ class LocalBlast:
         self._counter = 0
 
     def _db_path(self, database: str) -> Path:
-        try:
+        if database in _LOCAL_DB_MAP:
             stem = _LOCAL_DB_MAP[database]
-        except KeyError:
+        else:
+            entry = local_database_entry(database, self._db_dir)
+            if entry is None:
+                served = sorted(set(_LOCAL_DB_MAP) |
+                                {d["name"] for d in load_custom_databases(self._db_dir)})
+                raise SearchError(
+                    f"LocalBlast does not serve database {database!r} locally "
+                    f"(serves: {', '.join(served)}). "
+                    "Set SEARCH_BACKEND=ncbi for other databases.")
+            stem = entry["stem"]
+        if not any(self._db_dir.glob(stem + ".*")):
             raise SearchError(
-                f"LocalBlast has only a swissprot copy, not {database!r}. "
-                "Set SEARCH_BACKEND=ncbi for other databases.")
+                f"Local database {database!r} (files {stem}.*) not found in "
+                f"{self._db_dir}. Download its FASTA source and build it "
+                "with makeblastdb there first, or set SEARCH_BACKEND=ncbi.")
         return self._db_dir / stem
 
     def fetch_by_accession(self, accession: str) -> dict:
@@ -324,19 +448,22 @@ class LocalBlast:
         if not shutil.which("blastdbcmd"):
             raise SearchError("blastdbcmd not found on PATH. Install NCBI BLAST+.")
         acc = accession.strip().split()[0]
-        try:
-            proc = subprocess.run(
-                ["blastdbcmd", "-db", str(self._db_dir / "swissprot"),
-                 "-entry", acc, "-outfmt", "%f"],
-                capture_output=True, text=True,
-                timeout=config.LOCAL_BLAST_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired as exc:
-            raise SearchError(f"Local accession lookup timed out for {acc}: {exc}")
-        if proc.returncode != 0 or not proc.stdout.strip():
-            raise SearchError(
-                f"Accession {acc} not found in the local swissprot copy "
-                f"({self._db_dir}).")
-        return parse_blastdbcmd_fasta(proc.stdout)
+        for stem in _LOCAL_FETCH_STEMS:
+            if not any(self._db_dir.glob(stem + ".*")):
+                continue
+            try:
+                proc = subprocess.run(
+                    ["blastdbcmd", "-db", str(self._db_dir / stem),
+                     "-entry", acc, "-outfmt", "%f"],
+                    capture_output=True, text=True,
+                    timeout=config.LOCAL_BLAST_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                raise SearchError(f"Local accession lookup timed out for {acc}: {exc}")
+            if proc.returncode == 0 and proc.stdout.strip():
+                return parse_blastdbcmd_fasta(proc.stdout)
+        raise SearchError(
+            f"Accession {acc} not found in the local databases "
+            f"({', '.join(_LOCAL_FETCH_STEMS)}) in {self._db_dir}.")
 
     def submit(self, *, sequence: str, program: str, database: str, parameters: dict) -> str:
         import shutil
@@ -354,6 +481,11 @@ class LocalBlast:
             seqidlist_path = None
             organism_filter = parameters.get("organism_filter")
             exclude_organism = parameters.get("exclude_organism")
+            if (organism_filter or exclude_organism) and db_path.name != "swissprot":
+                raise SearchError(
+                    f"Organism filtering is only wired for the local swissprot "
+                    f"database, not {db_path.name}. Run this search without an "
+                    "organism filter, or pick swissprot / the real NCBI backend.")
             if organism_filter or exclude_organism:
                 seqids = local_seqids_filtered(
                     self._db_dir,

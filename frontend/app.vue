@@ -3,7 +3,8 @@ import type { Job } from '~/types/job'
 
 useJobWatcher()
 const { status, username, ensure, logout } = useAuth()
-const { listJobs } = useApi()
+const { listJobs, getSettings } = useApi()
+const labName = ref('')
 const route = useRoute()
 
 const showLogoutConfirm = ref(false)
@@ -17,7 +18,7 @@ let recentTimer: ReturnType<typeof setInterval> | undefined
 // Authenticated app routes live under the left sidebar; guests keep the plain header.
 const showSidebar = computed(() => {
   if (status.value !== 'in') return false
-  return route.path === '/new' || route.path.startsWith('/jobs')
+  return route.path === '/new' || route.path === '/settings' || route.path === '/library' || route.path.startsWith('/jobs')
 })
 
 async function loadRecent() {
@@ -32,13 +33,22 @@ async function loadRecent() {
   }
 }
 
+async function loadLabName() {
+  if (status.value !== 'in') { labName.value = ''; return }
+  try {
+    labName.value = (await getSettings()).settings.lab_name
+  } catch {
+    // Header lab name is cosmetic; Settings page reports load errors.
+  }
+}
+
 onMounted(() => {
   try {
     showRecent.value = localStorage.getItem(RECENT_KEY) === '1'
   } catch {
     // Private mode etc. — collapsed is a fine default.
   }
-  ensure().then(() => loadRecent())
+  ensure().then(() => { loadRecent(); loadLabName() })
   recentTimer = setInterval(loadRecent, 15000)
 })
 
@@ -54,7 +64,7 @@ onUnmounted(() => {
   if (recentTimer) clearInterval(recentTimer)
 })
 
-watch(() => route.path, () => loadRecent())
+watch(() => route.path, () => { loadRecent(); loadLabName() })
 
 async function signOut() {
   loggingOut.value = true
@@ -88,12 +98,9 @@ function shortQuestion(job: Job): string {
           </span>
           <span class="brand-word">Whats<span>Gene</span></span>
         </NuxtLink>
-        <nav v-if="!showSidebar" aria-label="Main">
-          <NuxtLink to="/">Home</NuxtLink>
-        </nav>
         <div class="header-auth">
           <template v-if="status === 'in'">
-            <span class="header-user">{{ username }}</span>
+            <span class="header-user">{{ labName || username }}</span>
             <button class="btn btn-small btn-secondary" @click="showLogoutConfirm = true">Log out</button>
           </template>
           <NuxtLink v-else-if="status === 'out'" to="/login" class="btn btn-small">Log in</NuxtLink>
@@ -125,6 +132,10 @@ function shortQuestion(job: Job): string {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
             Workflows
           </NuxtLink>
+          <NuxtLink to="/library" :class="{ 'side-active': route.path === '/library' }">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+            Library
+          </NuxtLink>
         </nav>
         <template v-if="recent.length">
           <button
@@ -153,6 +164,12 @@ function shortQuestion(job: Job): string {
             </li>
           </ul>
         </template>
+        <nav class="side-nav side-bottom" aria-label="Settings">
+          <NuxtLink to="/settings" :class="{ 'side-active': route.path === '/settings' }">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+            Settings
+          </NuxtLink>
+        </nav>
       </aside>
       <div class="app-content">
         <NuxtPage />
