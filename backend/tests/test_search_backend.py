@@ -225,15 +225,25 @@ class TestNcbiPolicy(unittest.TestCase):
 
 
 class TestLocalHelpers(unittest.TestCase):
-    def test_resolve_db_dir_requires_blastdb(self):
+    def test_resolve_db_dir_defaults_to_home_blastdb(self):
         old = os.environ.pop("BLASTDB", None)
+        old_home = os.environ.get("HOME")
         try:
-            with self.assertRaises(SearchError) as ctx:
-                resolve_blast_db_dir()
-            self.assertIn("BLASTDB is not set", str(ctx.exception))
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["HOME"] = tmp
+                # ~/blastdb missing: clear error naming the wizard.
+                with self.assertRaises(SearchError) as ctx:
+                    resolve_blast_db_dir()
+                self.assertIn("Run the setup wizard", str(ctx.exception))
+                Path(tmp, "blastdb").mkdir()
+                self.assertEqual(resolve_blast_db_dir(), Path(tmp) / "blastdb")
         finally:
             if old is not None:
                 os.environ["BLASTDB"] = old
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
 
     def test_resolve_db_dir_requires_directory(self):
         old = os.environ.get("BLASTDB")

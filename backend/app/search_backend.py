@@ -197,18 +197,16 @@ def local_database_catalog(db_dir: Path | str | None = None) -> list[dict]:
 
 
 def resolve_blast_db_dir() -> Path:
-    """Return $BLASTDB or raise a clear SearchError. No searches run here."""
+    """Return $BLASTDB (default ~/blastdb) or raise a clear SearchError."""
     import os
 
     raw = os.environ.get("BLASTDB", "").strip()
-    if not raw:
-        raise SearchError(
-            "BLASTDB is not set. LocalBlast needs BLASTDB pointing at a directory "
-            "containing a swissprot BLAST database plus names.dmp, nodes.dmp and "
-            "sprot.taxidmap for organism filters, e.g. BLASTDB=/data/blastdb.")
-    path = Path(raw)
+    path = Path(raw) if raw else Path.home() / "blastdb"
     if not path.is_dir():
-        raise SearchError(f"BLASTDB={raw} is not a directory.")
+        raise SearchError(
+            f"No BLAST database folder at {path}. Run the setup wizard "
+            "(Settings -> Local BLAST setup) to download and build one, "
+            "or set BLASTDB in backend/.env to your database folder.")
     return path
 
 

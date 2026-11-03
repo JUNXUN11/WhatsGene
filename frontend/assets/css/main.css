@@ -677,12 +677,15 @@ dl.meta dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monosp
   background: var(--surface);
   border-right: 1px solid var(--line);
   padding: 22px 14px 20px;
-  position: sticky;
+  position: fixed;
+  left: 0;
   top: var(--header-h);
-  height: calc(100vh - var(--header-h));
+  bottom: 0;
   overflow: visible;
-  align-self: flex-start;
+  z-index: 30;
 }
+.app-body .app-content { margin-left: 252px; }
+.with-sidebar .site-footer { padding-left: 252px; }
 .side-bottom {
   margin-top: auto;
   padding-top: 14px;
@@ -807,6 +810,8 @@ dl.meta dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monosp
   .sidebar .side-bottom { border-top: 0; padding-top: 0; margin-top: 0; margin-left: 4px; }
   .side-nav a { white-space: nowrap; }
   .side-toggle, .side-recent { display: none; }
+  .app-body .app-content { margin-left: 0; }
+  .with-sidebar .site-footer { padding-left: 0; }
 }
 
 /* ---------- confirmation modal ---------- */

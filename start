@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# WhatsGene One Box: first run sets everything up, then opens the tool.
+# Usage: ./start   (macOS and Linux; stop with Ctrl+C)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+URL="http://127.0.0.1:8000"
+
+step() { printf '\n==> %s\n' "$1"; }
+
+# 1. Python environment -------------------------------------------------
+step "Checking the Python environment"
+if [ ! -x "$ROOT/backend/.venv/bin/python" ]; then
+  echo "Creating backend/.venv ..."
+  python3 -m venv "$ROOT/backend/.venv"
+fi
+"$ROOT/backend/.venv/bin/pip" install -q -r "$ROOT/backend/requirements.txt"
+
+# 2. Login password ------------------------------------------------------
+# The backend creates its one login user from AUTH_PASSWORD at first
+# start. On a fresh clone we generate a password so the first run just
+# works; the value stays in backend/.env for every later run.
+step "Checking the login password"
+touch "$ROOT/backend/.env"
+if ! grep -qE '^AUTH_PASSWORD=[^[:space:]#]+' "$ROOT/backend/.env"; then
+  GENERATED="$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 16)"
+  printf '\nAUTH_PASSWORD=%s\n' "$GENERATED" >> "$ROOT/backend/.env"
+  echo "Generated a login password for the reviewer account."
+  echo "  username: reviewer"
+  echo "  password: $GENERATED"
+  echo "This password stays in backend/.env. Keep that file private."
+fi
+
+# 3. Built website --------------------------------------------------------
+step "Checking the built website"
+if [ ! -f "$ROOT/frontend/.output/public/index.html" ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: the first run needs Node.js (npm) to build the website." >&2
+    echo "Install Node.js 20 or newer, then run ./start again." >&2
+    exit 1
+  fi
+  echo "Building the website (first run only, takes a few minutes) ..."
+  (cd "$ROOT/frontend" && npm install --no-audit --no-fund && NUXT_PUBLIC_SITE_MODE=app npm run generate)
+fi
+
+# 4. Search database (warn only; the app still opens without one) --------
+step "Checking the search database"
+BLASTDB_DIR="$(grep -E '^BLASTDB=' "$ROOT/backend/.env" | tail -1 | cut -d= -f2- | tr -d ' "')"
+if [ -z "$BLASTDB_DIR" ]; then
+  echo "NOTE: BLASTDB is not set in backend/.env; using $HOME/blastdb."
+  echo "The tool opens either way: after login, open Settings -> Local BLAST"
+  echo "setup and press \"Run setup now\" to download and build the database,"
+  echo "or use the \"real NCBI\" backend per workflow in the meantime."
+  BLASTDB_DIR="$HOME/blastdb"
+fi
+if ! ls "$BLASTDB_DIR"/swissprot.* >/dev/null 2>&1; then
+  echo "NOTE: no database in $BLASTDB_DIR yet. After login, Settings -> Local"
+  echo "BLAST setup -> \"Run setup now\" downloads and builds it for you."
+else
+  echo "Found a local database in $BLASTDB_DIR."
+fi
+
+# 5. Serve ----------------------------------------------------------------
+step "Starting WhatsGene at $URL (stop with Ctrl+C)"
+if command -v open >/dev/null 2>&1; then
+  (sleep 2 && open "$URL") &
+elif command -v xdg-open >/dev/null 2>&1; then
+  (sleep 2 && xdg-open "$URL") &
+fi
+cd "$ROOT/backend" && exec "$ROOT/backend/.venv/bin/uvicorn" app.main:app \
+  --host 127.0.0.1 --port 8000

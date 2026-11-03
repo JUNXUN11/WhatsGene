@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import type { Job } from '~/types/job'
 
-useJobWatcher()
+// The hosted landing build has no backend and no login: hide all auth UI
+// and skip the session check plus workflow polling (static per build,
+// so guarding these calls is safe).
+const isLandingSite = useRuntimeConfig().public.siteMode === 'landing'
+if (!isLandingSite) useJobWatcher()
 const { status, username, ensure, logout } = useAuth()
 const { listJobs, getSettings } = useApi()
 const labName = ref('')
@@ -48,8 +52,10 @@ onMounted(() => {
   } catch {
     // Private mode etc. — collapsed is a fine default.
   }
-  ensure().then(() => { loadRecent(); loadLabName() })
-  recentTimer = setInterval(loadRecent, 15000)
+  if (!isLandingSite) {
+    ensure().then(() => { loadRecent(); loadLabName() })
+    recentTimer = setInterval(loadRecent, 15000)
+  }
 })
 
 function toggleRecent() {
@@ -85,7 +91,7 @@ function shortQuestion(job: Job): string {
 </script>
 
 <template>
-  <div>
+  <div :class="{ 'with-sidebar': showSidebar }">
     <header class="site-header" :class="{ 'site-header-app': showSidebar }">
       <div class="header-inner">
         <NuxtLink :to="status === 'in' ? '/new' : '/'" class="brand">
@@ -98,7 +104,7 @@ function shortQuestion(job: Job): string {
           </span>
           <span class="brand-word">Whats<span>Gene</span></span>
         </NuxtLink>
-        <div class="header-auth">
+        <div v-if="!isLandingSite" class="header-auth">
           <template v-if="status === 'in'">
             <span class="header-user">{{ labName || username }}</span>
             <button class="btn btn-small btn-secondary" @click="showLogoutConfirm = true">Log out</button>
