@@ -6,7 +6,7 @@ import type { Job } from '~/types/job'
 // so guarding these calls is safe).
 const isLandingSite = useRuntimeConfig().public.siteMode === 'landing'
 if (!isLandingSite) useJobWatcher()
-const { status, username, ensure, logout } = useAuth()
+const { status, username, auto, ensure, logout } = useAuth()
 const { listJobs, getSettings } = useApi()
 const labName = ref('')
 const route = useRoute()
@@ -91,7 +91,7 @@ function shortQuestion(job: Job): string {
 </script>
 
 <template>
-  <div :class="{ 'with-sidebar': showSidebar }">
+  <div class="site-shell" :class="{ 'with-sidebar': showSidebar }">
     <header class="site-header" :class="{ 'site-header-app': showSidebar }">
       <div class="header-inner">
         <NuxtLink :to="status === 'in' ? '/new' : '/'" class="brand">
@@ -107,7 +107,7 @@ function shortQuestion(job: Job): string {
         <div v-if="!isLandingSite" class="header-auth">
           <template v-if="status === 'in'">
             <span class="header-user">{{ labName || username }}</span>
-            <button class="btn btn-small btn-secondary" @click="showLogoutConfirm = true">Log out</button>
+            <button v-if="!auto" class="btn btn-small btn-secondary" @click="showLogoutConfirm = true">Log out</button>
           </template>
           <NuxtLink v-else-if="status === 'out'" to="/login" class="btn btn-small">Log in</NuxtLink>
         </div>

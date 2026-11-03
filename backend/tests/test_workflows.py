@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -39,13 +40,32 @@ def _backend() -> Fixture:
                   "query_start": 1, "query_end": 12, "subject_length": 14}]})
 
 
+class _StuckNcbi(Fixture):
+    """Reports as the NCBI backend and waits in submit until released."""
+
+    name = "ncbi"
+
+    def __init__(self) -> None:
+        super().__init__(primary_hits=_hits())
+        self.release = threading.Event()
+
+    def submit(self, **kw) -> str:
+        self.release.wait(timeout=30)
+        return super().submit(**kw)
+
+
 class Base(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         config.DATABASE_PATH = Path(self._tmp.name) / "test.db"
+        # Plain-http test client: keep a split-hosting backend/.env from
+        # forcing a Secure session cookie the client never sends back.
+        self._old_cookie = config.COOKIE_SAMESITE, config.COOKIE_SECURE
+        config.COOKIE_SAMESITE, config.COOKIE_SECURE = "lax", False
         db.init_db()
 
     def tearDown(self) -> None:
+        config.COOKIE_SAMESITE, config.COOKIE_SECURE = self._old_cookie
         self._tmp.cleanup()
 
 
@@ -181,6 +201,46 @@ class TestParallelJobs(Base):
             time.sleep(0.05)
         self.assertTrue(all((db.get_job(j["id"]) or {}).get("status") == "done" for j in jobs))
         self.assertEqual(len(db.list_jobs_for_user("multi")), 2)
+
+    def test_stuck_ncbi_workflow_does_not_hold_a_local_slot(self):
+        old_max = config.MAX_CONCURRENT_JOBS
+        old_pools = worker._executor, worker._ncbi_executor
+        config.MAX_CONCURRENT_JOBS = 1  # one local slot: holding it would block
+        worker._executor = worker._ncbi_executor = None
+        ncbi = _StuckNcbi()
+        try:
+            stuck = db.create_job(question="q", raw_input=SHORT_QUERY, source="web")
+            local = db.create_job(question="q", raw_input=SHORT_QUERY, source="web")
+            self.assertTrue(worker.submit_async(stuck, ncbi))
+            self.assertTrue(worker.submit_async(local, _backend()))
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if (db.get_job(local["id"]) or {}).get("status") == "done":
+                    break
+                time.sleep(0.05)
+            self.assertEqual((db.get_job(local["id"]) or {}).get("status"), "done")
+            self.assertEqual((db.get_job(stuck["id"]) or {}).get("status"), "running")
+        finally:
+            ncbi.release.set()
+            for pool in (worker._executor, worker._ncbi_executor):
+                if pool is not None:
+                    pool.shutdown(wait=True)
+            worker._executor, worker._ncbi_executor = old_pools
+            config.MAX_CONCURRENT_JOBS = old_max
+        self.assertEqual((db.get_job(stuck["id"]) or {}).get("status"), "done")
+
+    def test_unbuildable_backend_fails_instead_of_staying_queued(self):
+        old_email = config.NCBI_EMAIL
+        config.NCBI_EMAIL = ""  # NcbiRemote refuses to start without it
+        try:
+            job = db.create_job(question="q", raw_input=SHORT_QUERY, source="web",
+                                backend_choice="ncbi")
+            self.assertFalse(worker.submit_async(job))
+        finally:
+            config.NCBI_EMAIL = old_email
+        final = db.get_job(job["id"]) or {}
+        self.assertEqual(final.get("status"), "failed")
+        self.assertIn("NCBI_EMAIL", final.get("error") or "")
 
     def test_second_whatsapp_sequence_is_not_blocked(self):
         backend = _backend()

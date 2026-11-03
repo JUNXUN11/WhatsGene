@@ -94,6 +94,22 @@ export interface LocalDatabase {
   ready: boolean
 }
 
+export interface AuthMe {
+  authenticated: boolean
+  username?: string
+  auto?: boolean
+  owner?: boolean
+  needs_setup?: boolean
+  signup?: boolean
+}
+
+export interface Account {
+  id: number
+  username: string
+  created_at: string
+  owner: boolean
+}
+
 export function useApi() {
   const config = useRuntimeConfig()
   const base = (config.public.apiBase as string).replace(/\/$/, '')
@@ -110,8 +126,44 @@ export function useApi() {
     await $fetch(`${base}/auth/logout`, { ...withCreds, method: 'POST' })
   }
 
-  async function me(): Promise<{ authenticated: boolean; username?: string }> {
-    return await $fetch<{ authenticated: boolean; username?: string }>(`${base}/auth/me`, withCreds)
+  async function me(): Promise<AuthMe> {
+    return await $fetch<AuthMe>(`${base}/auth/me`, withCreds)
+  }
+
+  async function setupOwner(username: string, password: string): Promise<{ username: string }> {
+    return await $fetch<{ username: string }>(`${base}/auth/setup`, {
+      ...withCreds, method: 'POST', body: { username, password },
+    })
+  }
+
+  async function register(username: string, password: string): Promise<{ username: string }> {
+    return await $fetch<{ username: string }>(`${base}/auth/register`, {
+      ...withCreds, method: 'POST', body: { username, password },
+    })
+  }
+
+  async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    await $fetch(`${base}/auth/password`, {
+      ...withCreds, method: 'POST', body: { current_password: currentPassword, new_password: newPassword },
+    })
+  }
+
+  async function listUsers(): Promise<Account[]> {
+    return await $fetch<Account[]>(`${base}/users`, withCreds)
+  }
+
+  async function createUser(username: string, password: string): Promise<Account> {
+    return await $fetch<Account>(`${base}/users`, {
+      ...withCreds, method: 'POST', body: { username, password },
+    })
+  }
+
+  async function resetUserPassword(id: number, password: string): Promise<void> {
+    await $fetch(`${base}/users/${id}/password`, { ...withCreds, method: 'POST', body: { password } })
+  }
+
+  async function removeUser(id: number): Promise<{ moved_workflows: number }> {
+    return await $fetch<{ moved_workflows: number }>(`${base}/users/${id}`, { ...withCreds, method: 'DELETE' })
   }
 
   async function createJob(sequence: string, question: string, options: JobCreateOptions = {}): Promise<Job> {
@@ -212,5 +264,5 @@ export function useApi() {
     })
   }
 
-  return { createJob, getJob, listJobs, listDatabases, getLibrary, sortLibrary, buildDatabase, buildFromTaxon, libraryQueryText, runSetup, setupStatus, cancelJob, deleteJob, askJob, alignJob, login, logout, me, getSettings, saveSettings, aiSetup, base }
+  return { createJob, getJob, listJobs, listDatabases, getLibrary, sortLibrary, buildDatabase, buildFromTaxon, libraryQueryText, runSetup, setupStatus, cancelJob, deleteJob, askJob, alignJob, login, logout, me, setupOwner, register, changePassword, listUsers, createUser, resetUserPassword, removeUser, getSettings, saveSettings, aiSetup, base }
 }

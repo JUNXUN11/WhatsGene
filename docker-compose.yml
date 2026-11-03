@@ -54,6 +54,9 @@ services:
       NCBI_API_KEY: ${NCBI_API_KEY:-}
       NCBI_POLL_INTERVAL_SECONDS: ${NCBI_POLL_INTERVAL_SECONDS:-60}
       NCBI_MAX_WAIT_SECONDS: ${NCBI_MAX_WAIT_SECONDS:-1800}
+      # Shared server: always a login, whatever backend/.env says (decision 016).
+      AUTH_MODE: multi
+      ALLOW_SIGNUP: "false"
       AUTH_USERNAME: ${AUTH_USERNAME:-reviewer}
       AUTH_PASSWORD: ${AUTH_PASSWORD:?Set a strong AUTH_PASSWORD in .env}
       COOKIE_SECURE: "true"

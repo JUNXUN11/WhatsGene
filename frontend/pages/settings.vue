@@ -49,8 +49,14 @@ const tabs = [
   { id: 'setup', label: 'Local BLAST setup' },
   { id: 'lab', label: 'My lab' },
   { id: 'judging', label: 'Search & judging' },
+  { id: 'accounts', label: 'Accounts' },
 ] as const
-const activeTab = ref<(typeof tabs)[number]['id']>('ai')
+type TabId = (typeof tabs)[number]['id']
+// ?tab=setup opens a tab directly (the first-run page sends new owners
+// to Local BLAST setup).
+const route = useRoute()
+const requestedTab = tabs.find(t => t.id === route.query.tab)?.id
+const activeTab = ref<TabId>(requestedTab || 'ai')
 
 const stepMarks: Record<string, string> = {
   done: 'Done', needed: 'Needed', pending: 'Waiting', demo_only: 'Plan only',
@@ -330,7 +336,11 @@ function useStandard() {
       </fieldset>
       </div>
 
-      <div class="submit-row">
+      <div v-show="activeTab === 'accounts'">
+        <AccountsPanel />
+      </div>
+
+      <div v-show="activeTab !== 'accounts'" class="submit-row">
         <button class="btn" type="submit" :disabled="busy">{{ busy ? 'Saving…' : 'Save settings' }}</button>
         <NuxtLink to="/new" class="btn btn-secondary">New search</NuxtLink>
       </div>

@@ -166,6 +166,7 @@ function submit() {
 }
 
 async function confirmSubmit() {
+  requestSystemNotifications() // this click is the gesture the prompt needs
   busy.value = true
   try {
     const job = await createJob(sequence.value.trim(), fullQuestion(), {

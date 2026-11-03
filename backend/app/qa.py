@@ -82,6 +82,9 @@ def answer_question(*, job: dict | None, searches: list[dict] | None,
                              f"({_fmt(t.get('organism'))}), E-value {_fmt(t.get('evalue'))}, "
                              f"identity {_fmt(t.get('identity'))}%, coverage "
                              f"{_fmt(t.get('query_coverage'))}%, {_fmt(t.get('classification'))}")
+            elif s.get("status") == "failed":
+                # Quote the stored reason, so a skipped program never reads as "no matches".
+                parts.append(f"{s.get('program')}: search failed ({s.get('error') or 'no reason stored'})")
             else:
                 parts.append(f"{s.get('program')}: no hits stored")
         ranked = sorted((s for s in primaries if _top(s)),

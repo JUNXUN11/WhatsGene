@@ -16,7 +16,7 @@ from typing import Callable
 
 from . import agent, config, db, rules_engine, settings as user_settings
 from .blast_params import parameters_for
-from .search_backend import SearchBackend, SearchError
+from .search_backend import NcbiRemote, SearchBackend, SearchError, local_database_name
 from .classify import classify_hits, flag_unexpected_taxa
 from .validate import ValidationError, detect_type, looks_like_accession, normalise_sequence, parse_accession_query
 from .verify import coverage_from_coordinates, verify_candidate
@@ -38,6 +38,21 @@ def _with_coverage(hits: list[dict], query_length: int) -> list[dict]:
                 query_length=query_length)
         out.append(enriched)
     return out
+
+
+def _fetch_from_ncbi(accession: str) -> tuple[dict | None, str]:
+    """Local mode fallback: fetch one accession through NCBI E-utilities.
+
+    Only the accession ID goes to NCBI; the BLAST search itself stays on
+    this machine. Returns (record, "") or (None, why it failed).
+    """
+    if not config.NCBI_EMAIL:
+        return None, ("Set NCBI_EMAIL in backend/.env to fetch accessions from NCBI, "
+                      "or paste the sequence itself.")
+    try:
+        return NcbiRemote().fetch_by_accession(accession), ""
+    except SearchError as exc:
+        return None, str(exc)
 
 
 def process_job(job: dict, backend: SearchBackend,
@@ -74,13 +89,22 @@ def process_job(job: dict, backend: SearchBackend,
     accession_candidate, subrange = parse_accession_query(raw)
     if looks_like_accession(accession_candidate):
         accession = accession_candidate.upper()
+        fetched_via = f"{backend.name} backend"
         try:
             record = backend.fetch_by_accession(accession)
         except SearchError as exc:
-            _log(job_id, step="fetch_accession", observation=f"Accession {accession}",
-                 decision="fail job", reason=str(exc))
-            return db.update_job(job_id, status="failed", input_kind="accession",
-                                 accession=accession, error=str(exc)) or job
+            record, ncbi_error = (_fetch_from_ncbi(accession) if backend.name == "local"
+                                  else (None, ""))
+            if record is None:
+                error = f"{exc} {ncbi_error}".strip()
+                _log(job_id, step="fetch_accession", observation=f"Accession {accession}",
+                     decision="fail job", reason=error)
+                return db.update_job(job_id, status="failed", input_kind="accession",
+                                     accession=accession, error=error) or job
+            fetched_via = "NCBI E-utilities (accession only; the search stays local)"
+            _log(job_id, step="fetch_accession", observation=f"{accession} is not in the local databases",
+                 decision="fetch the sequence from NCBI E-utilities",
+                 reason="Only the accession ID is sent to NCBI; the BLAST search runs on this machine.")
         sequence = (record.get("sequence") or "").upper()
         if subrange is not None:
             start, end = subrange
@@ -102,7 +126,7 @@ def process_job(job: dict, backend: SearchBackend,
         if organism_match:
             query_organism = organism_match.group(1)
         _log(job_id, step="fetch_accession", observation=f"{accession} -> {len(sequence)} residues",
-             decision="use fetched sequence", reason=f"Accession resolved via {backend.name} backend.")
+             decision="use fetched sequence", reason=f"Accession resolved via {fetched_via}.")
     else:
         try:
             sequence, _header = normalise_sequence(raw)
@@ -166,6 +190,16 @@ def process_job(job: dict, backend: SearchBackend,
             plan[0] = choice
             applied_deviation = True
 
+    def recorded_db(database: str) -> str:
+        """The database the search really ran on, for every stored record."""
+        return local_database_name(database) if backend.name == "local" else database
+
+    if backend.name == "local" and recorded_db(choice["database"]) != choice["database"]:
+        _log(job_id, step="database_local", observation=f"Rules engine named {choice['database']}",
+             decision=f"search the local {recorded_db(choice['database'])} copy",
+             reason="LocalBlast serves this database from a local copy (decision 001); "
+                    "results name the database actually searched.")
+
     def params_for_spec(spec: dict, kind: str) -> dict:
         base = parameters_for(program=spec["program"], detected_type=detected,
                               query_length=len(sequence),
@@ -192,9 +226,9 @@ def process_job(job: dict, backend: SearchBackend,
     db.update_job(job_id, sequence=sequence, query_length=len(sequence), detected_type=detected,
                   input_kind="accession" if accession else f"fasta_{detected}",
                   accession=accession, intent=intent, program=choice["program"],
-                  database=choice["database"], organism_filter=choice.get("organism_filter"),
+                  database=recorded_db(choice["database"]), organism_filter=choice.get("organism_filter"),
                   parameters=primary_params)
-    notify(f"Job {job_id} started: {choice['program']} against {choice['database']}.")
+    notify(f"Job {job_id} started: {choice['program']} against {recorded_db(choice['database'])}.")
 
     # --- search / classify / verify across the planned programs ---
     primary_hits: list[dict] = []
@@ -217,15 +251,15 @@ def process_job(job: dict, backend: SearchBackend,
                                  database=spec["database"], parameters=params)
         except SearchError as exc:
             search_id = db.create_search(job_id, kind=kind, program=spec["program"],
-                                         database=spec["database"], parameters=params, rid=None)
+                                         database=recorded_db(spec["database"]), parameters=params, rid=None)
             db.complete_search(search_id, hits=[], status="failed", error=str(exc))
-            _log(job_id, step="submit", observation=f"{spec['program']} / {spec['database']}",
+            _log(job_id, step="submit", observation=f"{spec['program']} / {recorded_db(spec['database'])}",
                  decision="skip this program, continue workflow", reason=str(exc))
             last_error = str(exc)
             return None
         searches_used += 1
         search_id = db.create_search(job_id, kind=kind, program=spec["program"],
-                                     database=spec["database"], parameters=params, rid=rid)
+                                     database=recorded_db(spec["database"]), parameters=params, rid=rid)
         db.update_job(job_id, searches_used=searches_used)
         _log(job_id, step="submit", observation=f"RID {rid} ({kind}, {spec['program']})",
              decision="poll for results", reason=f"BLAST job submitted via {backend.name} backend.")
@@ -287,7 +321,7 @@ def process_job(job: dict, backend: SearchBackend,
                 continue
             searches_used += 1
             recip_id = db.create_search(job_id, kind="reciprocal", program=spec["program"],
-                                        database=spec["database"], parameters=recip_params, rid=recip_rid)
+                                        database=recorded_db(spec["database"]), parameters=recip_params, rid=recip_rid)
             db.update_job(job_id, searches_used=searches_used)
             if backend.poll(recip_rid) != "ready":
                 db.complete_search(recip_id, hits=[], status="failed",

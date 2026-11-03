@@ -31,7 +31,7 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: 'WhatsGene — Find a gene, without watching BLAST',
+      title: 'WhatsGene',
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
       ],

@@ -71,13 +71,26 @@ LIBRARY_DIR: Path = Path(_env("WHATSGENE_LIBRARY_DIR",
 # --- Model Ask guardrails (decision 007): quotas, cache, kill switch ---
 MODEL_ASK_ENABLED: bool = _env("MODEL_ASK_ENABLED", "false").lower() in ("1", "true", "yes")
 ASK_DAILY_LIMIT: int = int(_env("ASK_DAILY_LIMIT", "20") or "20")
-JOBS_DAILY_LIMIT: int = int(_env("JOBS_DAILY_LIMIT", "10") or "10")
+# Searches per user per day. 0 (default) means no cap: a local tool never
+# refuses its owner. Shared servers (docker-compose) set a cap.
+JOBS_DAILY_LIMIT: int = int(_env("JOBS_DAILY_LIMIT", "0") or "0")
 MODEL_MAX_TOKENS: int = int(_env("MODEL_MAX_TOKENS", "400") or "400")
 MODEL_TIMEOUT_SECONDS: float = float(_env("MODEL_TIMEOUT_SECONDS", "60") or "60")
 
 # --- Auth: one seeded user, no signup (decision 007) ---
 AUTH_USERNAME: str = _env("AUTH_USERNAME", "reviewer")
 AUTH_PASSWORD: str = _env("AUTH_PASSWORD")
+# Login mode (decision 016). multi (default): every browser logs in.
+# single: the owner's own browser on this machine is signed in as the
+# first user with no login page; ./start writes this. Any request that
+# arrives over the network or through a proxy still needs a login.
+AUTH_MODE: str = _env("AUTH_MODE", "multi").lower()
+if AUTH_MODE not in ("single", "multi"):
+    AUTH_MODE = "multi"
+# Sign-up on the login page (decision 017). On by default for the local
+# tool; docker-compose turns it off, since a public server must not let
+# strangers in. Never creates the owner: that stays the first-run page.
+ALLOW_SIGNUP: bool = _env("ALLOW_SIGNUP", "true").lower() in ("1", "true", "yes")
 COOKIE_SECURE: bool = _env("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 # Session cookie SameSite policy. "lax" (default) is correct when page and
 # API share one site (single-domain compose). Split hosting — frontend on

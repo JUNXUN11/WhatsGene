@@ -1,7 +1,7 @@
 """Tier 2 MSA -> tree (Lab 06 + Lab 07 methods, PRD §5.1).
 
-Collect confirmed homologs, align with MAFFT at EBI (Lab 06's tool),
-then build a neighbor-joining tree with Poisson-corrected distances
+Collect confirmed homologs, align with MAFFT (Lab 06's tool: on this
+machine when installed, else at EBI), then build a neighbor-joining tree with Poisson-corrected distances
 after complete deletion of gap columns (Lab 07's MEGA preferences).
 Bootstrapping and Tajima's test stay roadmap-only (owner charter).
 Alignment/tree computation is deterministic code; the model only words
@@ -174,6 +174,34 @@ class EbiMafft:
             return result.text
 
 
+class LocalMafft:
+    """MAFFT installed on this machine: seconds, and no sequence leaves it."""
+
+    name = "local-mafft"
+
+    def __init__(self, executable: str = "mafft", *, timeout_seconds: float = 600.0) -> None:
+        self._exe = executable
+        self._timeout = timeout_seconds
+
+    def align(self, sequences: list[dict]) -> str:
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        fasta = "".join(f">{s['label']}\n{s['sequence']}\n" for s in sequences)
+        with tempfile.TemporaryDirectory(prefix="whatsgene_msa_") as tmp:
+            query = Path(tmp) / "homologs.fasta"
+            query.write_text(fasta, encoding="utf-8")
+            try:
+                proc = subprocess.run([self._exe, "--auto", "--quiet", str(query)],
+                                      capture_output=True, text=True, timeout=self._timeout)
+            except subprocess.TimeoutExpired as exc:
+                raise MsaError(f"Local MAFFT timed out: {exc}") from exc
+        if proc.returncode != 0 or not proc.stdout.strip():
+            raise MsaError(f"Local MAFFT failed (exit {proc.returncode}): {proc.stderr.strip()[-300:]}")
+        return proc.stdout
+
+
 class FixtureMsa:
     """Recorded/padded alignment for tests and offline demos."""
 
@@ -192,8 +220,15 @@ class FixtureMsa:
 def get_msa_backend() -> MsaBackend:
     from . import config
 
+    import shutil
+
     if (config.SEARCH_BACKEND or "").strip().lower() == "fixture":
         return FixtureMsa()
+    # Same MAFFT, run here when installed: seconds instead of the EBI
+    # queue (minutes), and the homolog sequences stay on this machine.
+    local = shutil.which("mafft")
+    if local:
+        return LocalMafft(local)
     return EbiMafft(config.NCBI_EMAIL)
 
 

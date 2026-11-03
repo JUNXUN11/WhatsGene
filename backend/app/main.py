@@ -79,6 +79,20 @@ class LoginBody(BaseModel):
     password: str
 
 
+class AccountBody(BaseModel):
+    username: str
+    password: str
+
+
+class PasswordChangeBody(BaseModel):
+    current_password: str = ""
+    new_password: str
+
+
+class PasswordResetBody(BaseModel):
+    password: str
+
+
 class SettingsBody(BaseModel):
     lab_name: str = ""
     default_organism: str = ""
@@ -113,12 +127,42 @@ class TaxonBuildBody(BaseModel):
     name: str = Field(description="Custom database name, e.g. celegans_proteins")
 
 
+def _client_host(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _request_user(request: Request) -> tuple[dict | None, bool]:
+    """(user, auto): the owner under AUTH_MODE=single, else the session user."""
+    owner = auth.single_mode_owner(_client_host(request), request.headers)
+    if owner:
+        return owner, True
+    return auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE)), False
+
+
 def current_user(request: Request) -> dict:
     """Dependency: the logged-in user, or 401."""
-    user = auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE))
+    user, _auto = _request_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not logged in.")
     return {"id": user["id"], "username": user["username"]}
+
+
+def owner_user(user: dict = Depends(current_user)) -> dict:
+    """Dependency: the logged-in owner, or 403. Only the owner manages accounts."""
+    if not auth.is_owner(user):
+        raise HTTPException(status_code=403, detail="Only the owner of this WhatsGene can manage accounts.")
+    return user
+
+
+def _start_session(response: Response, user_id: int) -> None:
+    token = auth.create_session_token()
+    db.create_session(user_id, token, auth.session_expiry_iso())
+    # Split hosting (frontend and API on different sites) needs
+    # SameSite=None; browsers reject that without Secure, so force it.
+    samesite = config.COOKIE_SAMESITE
+    response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite=samesite,
+                        secure=config.COOKIE_SECURE or samesite == "none",
+                        max_age=auth.cookie_max_age(), path="/")
 
 
 def _owned_job(job_id: str, user: dict) -> dict:
@@ -139,14 +183,7 @@ def login(body: LoginBody, response: Response) -> dict:
     user = db.get_user_by_username((body.username or "").strip())
     if not user or not auth.verify_password(body.password or "", user["password_hash"]):
         raise HTTPException(status_code=401, detail="Wrong username or password.")
-    token = auth.create_session_token()
-    db.create_session(user["id"], token, auth.session_expiry_iso())
-    # Split hosting (frontend and API on different sites) needs
-    # SameSite=None; browsers reject that without Secure, so force it.
-    samesite = config.COOKIE_SAMESITE
-    response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite=samesite,
-                        secure=config.COOKIE_SECURE or samesite == "none",
-                        max_age=auth.cookie_max_age(), path="/")
+    _start_session(response, user["id"])
     return {"username": user["username"]}
 
 
@@ -163,10 +200,119 @@ def logout(request: Request, response: Response) -> dict:
 
 @api.get("/auth/me")
 def me(request: Request) -> dict:
-    user = auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE))
+    user, auto = _request_user(request)
     if not user:
-        return {"authenticated": False}
-    return {"authenticated": True, "username": user["username"]}
+        # needs_setup: no account yet, so the site opens the first-run page.
+        # signup: the login page offers Create an account.
+        return {"authenticated": False,
+                "needs_setup": auth.can_create_owner(_client_host(request), request.headers),
+                "signup": config.ALLOW_SIGNUP and db.user_count() > 0}
+    # auto: signed in by AUTH_MODE=single, so the site hides Log out.
+    return {"authenticated": True, "username": user["username"], "auto": auto,
+            "owner": auth.is_owner(user)}
+
+
+@api.post("/auth/setup", status_code=201)
+def setup_owner(body: AccountBody, request: Request, response: Response) -> dict:
+    """First run: the owner picks a username and password (decision 017)."""
+    if not auth.can_create_owner(_client_host(request), request.headers):
+        raise HTTPException(status_code=403, detail=(
+            "This WhatsGene already has an owner, or this browser is not on the "
+            "machine that runs WhatsGene. Ask the owner for an account."))
+    try:
+        user = auth.create_owner(body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _start_session(response, user["id"])
+    return {"username": user["username"]}
+
+
+@api.post("/auth/register", status_code=201)
+def register(body: AccountBody, response: Response) -> dict:
+    """Sign-up from the login page (decision 017). The new account is a
+    member with its own empty workflows; it can never be the owner."""
+    if not config.ALLOW_SIGNUP:
+        raise HTTPException(status_code=403, detail=(
+            "Sign-up is off on this WhatsGene. Ask the owner for an account."))
+    if db.user_count() == 0:
+        raise HTTPException(status_code=403, detail=(
+            "This WhatsGene has no owner yet. Open it on the machine that runs "
+            "it and create the owner account first."))
+    try:
+        user = auth.create_account(body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _start_session(response, user["id"])
+    return {"username": user["username"]}
+
+
+@api.post("/auth/password")
+def change_password(body: PasswordChangeBody, request: Request, response: Response) -> dict:
+    """Change your own password. An automatic sign-in skips the current
+    password: that browser already sits at the owner's machine, and an
+    upgraded install may never have shown the generated one."""
+    user, auto = _request_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not logged in.")
+    if not auto and not auth.verify_password(body.current_password or "", user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Your current password is wrong.")
+    try:
+        auth.check_password(body.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.set_password_hash(user["id"], auth.hash_password(body.new_password))
+    db.delete_user_sessions(user["id"])
+    _start_session(response, user["id"])
+    return {"status": "password changed"}
+
+
+@api.get("/users")
+def list_users(_owner: dict = Depends(owner_user)) -> list[dict]:
+    users = db.list_users()
+    return [{**u, "owner": i == 0} for i, u in enumerate(users)]
+
+
+@api.post("/users", status_code=201)
+def create_user(body: AccountBody, request: Request, response: Response,
+                owner: dict = Depends(owner_user)) -> dict:
+    try:
+        user = auth.create_account(body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # With two accounts every browser logs in (decision 017). An owner
+    # signed in automatically has no session yet; give one so adding a
+    # person does not throw the owner onto the login page.
+    if not auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE)):
+        _start_session(response, owner["id"])
+    return {"id": user["id"], "username": user["username"],
+            "created_at": user["created_at"], "owner": False}
+
+
+@api.post("/users/{user_id}/password")
+def reset_user_password(user_id: int, body: PasswordResetBody,
+                        owner: dict = Depends(owner_user)) -> dict:
+    if user_id == owner["id"]:
+        raise HTTPException(status_code=400, detail="Use Change my password for your own account.")
+    if not db.get_user(user_id):
+        raise HTTPException(status_code=404, detail="No such account.")
+    try:
+        auth.check_password(body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.set_password_hash(user_id, auth.hash_password(body.password))
+    db.delete_user_sessions(user_id)
+    return {"status": "password reset"}
+
+
+@api.delete("/users/{user_id}")
+def remove_user(user_id: int, owner: dict = Depends(owner_user)) -> dict:
+    """Remove an account; its workflows move to the owner, so no result is lost."""
+    if user_id == owner["id"]:
+        raise HTTPException(status_code=400, detail="The owner account cannot be removed.")
+    if not db.get_user(user_id):
+        raise HTTPException(status_code=404, detail="No such account.")
+    moved = db.delete_user(user_id, heir_id=owner["id"])
+    return {"status": "removed", "moved_workflows": moved}
 
 
 @api.get("/settings")
@@ -368,7 +514,8 @@ def create_job(body: JobCreate, user: dict = Depends(current_user)) -> dict:
                     status_code=503,
                     detail=f"Local database {requested_db} is not built on this "
                            "machine yet. Build it first (see README), or clear the database.")
-    if db.get_usage(user["id"], db.today_iso(), "jobs") >= config.JOBS_DAILY_LIMIT:
+    if config.JOBS_DAILY_LIMIT and \
+            db.get_usage(user["id"], db.today_iso(), "jobs") >= config.JOBS_DAILY_LIMIT:
         raise HTTPException(status_code=429,
                             detail=f"Daily search limit reached ({config.JOBS_DAILY_LIMIT}/day).")
     notify = (body.whatsapp_number or "").strip() or None
@@ -476,10 +623,24 @@ def _public_job(job: dict, user_id: int | None = None) -> dict:
     public["notify_configured"] = bool(job.get("notify_to") or job.get("whatsapp_user_id"))
     public["results_url"] = f"{config.FRONTEND_BASE_URL}/jobs/{job['id']}"
     backend_name = (job.get("parameters") or {}).get("backend", "ncbi")
-    history = "Job history is stored server-side; ask WhatsGene to 'forget my history' to delete it."
-    if backend_name == "local":
+    # Web workflows are deleted from their page; only WhatsApp has the
+    # 'forget my history' command.
+    if job.get("source") == "whatsapp":
+        history = "Job history is stored server-side; message 'forget my history' on WhatsApp to delete it."
+    else:
+        history = ("This workflow is stored in the results file on this machine; "
+                   "delete it from its page at any time.")
+    fetched_from_ncbi = any(s.get("step") == "fetch_accession"
+                            and "NCBI E-utilities" in (s.get("decision") or "")
+                            for s in public["step_log"])
+    if backend_name == "local" and fetched_from_ncbi:
         public["data_notice"] = (
-            "Your sequence was searched against a database on this server; "
+            "The accession ID was sent to NCBI only to fetch its sequence; the BLAST "
+            f"search runs on this machine and no sequence is sent to NCBI BLAST. {history}"
+        )
+    elif backend_name == "local":
+        public["data_notice"] = (
+            "Your sequence was searched against a database on this machine; "
             f"nothing was sent to NCBI. {history}"
         )
     elif backend_name == "fixture":

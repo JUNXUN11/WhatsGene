@@ -307,6 +307,7 @@ const suggestions = [
       <h2>Alignment and tree</h2>
       <p class="hint">From the confirmed homologs of this workflow: MAFFT alignment, then a neighbor-joining tree with Poisson-corrected distances after complete deletion of gap columns.</p>
       <button v-if="job.status === 'done' && !job.msa_alignment" class="btn" :disabled="aligning" @click="align">{{ aligning ? 'Aligning…' : 'Build MSA + tree' }}</button>
+      <p v-if="job.status === 'done' && !job.msa_alignment" class="hint">{{ aligning ? 'Aligning — with the EBI service this takes 1–3 minutes; keep this page open.' : 'Uses MAFFT on this machine when installed (seconds). Otherwise the homolog sequences go to the MAFFT service at EBI, which takes 1–3 minutes.' }}</p>
       <p v-if="alignError" class="error">{{ alignError }}</p>
       <template v-if="job.msa_alignment">
         <p style="font-size: 14px;"><strong>Homologs:</strong> {{ (job.homologs || []).map(h => String(h.label)).join(', ') }}</p>
