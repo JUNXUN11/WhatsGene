@@ -113,9 +113,18 @@ class TaxonBuildBody(BaseModel):
     name: str = Field(description="Custom database name, e.g. celegans_proteins")
 
 
+def _request_user(request: Request) -> tuple[dict | None, bool]:
+    """(user, auto): the owner under AUTH_MODE=single, else the session user."""
+    client_host = request.client.host if request.client else None
+    owner = auth.single_mode_owner(client_host, request.headers)
+    if owner:
+        return owner, True
+    return auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE)), False
+
+
 def current_user(request: Request) -> dict:
     """Dependency: the logged-in user, or 401."""
-    user = auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE))
+    user, _auto = _request_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not logged in.")
     return {"id": user["id"], "username": user["username"]}
@@ -163,10 +172,11 @@ def logout(request: Request, response: Response) -> dict:
 
 @api.get("/auth/me")
 def me(request: Request) -> dict:
-    user = auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE))
+    user, auto = _request_user(request)
     if not user:
         return {"authenticated": False}
-    return {"authenticated": True, "username": user["username"]}
+    # auto: signed in by AUTH_MODE=single, so the site hides Log out.
+    return {"authenticated": True, "username": user["username"], "auto": auto}
 
 
 @api.get("/settings")

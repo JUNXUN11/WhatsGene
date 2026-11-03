@@ -4,14 +4,19 @@ One seeded user, no signup route. Passwords are PBKDF2-SHA256 hashes
 (stdlib only); sessions are random tokens in SQLite, carried in an
 HttpOnly cookie. Ownership: every web job carries user_id and routes
 only serve jobs owned by the caller.
+
+AUTH_MODE=single (decision 016) skips the login page for the owner's
+own browser on this machine; everyone else still logs in.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import config, db
 
@@ -58,10 +63,14 @@ def ensure_seeded_user() -> dict[str, Any] | None:
     """Create the AUTH_USERNAME user once; adopt pre-auth jobs. Idempotent.
 
     No-op when users exist or AUTH_PASSWORD is unset (e.g. offline tests).
+    AUTH_MODE=single seeds anyway, with a random password, so the owner
+    is never stuck on a login page nobody can pass.
     """
     if db.user_count() > 0:
         return None
     password = (config.AUTH_PASSWORD or "").strip()
+    if not password and config.AUTH_MODE == "single":
+        password = secrets.token_urlsafe(24)
     if not password:
         return None
     user = db.create_user(config.AUTH_USERNAME.strip() or "reviewer", hash_password(password))
@@ -84,3 +93,46 @@ def resolve_session(token: str | None) -> dict[str, Any] | None:
         db.delete_session(token)
         return None
     return db.get_user(session["user_id"])
+
+
+# AUTH_MODE=single trusts only the owner's browser on this machine. Each
+# check closes one way in: a loopback socket (not the network), a
+# loopback Host (not DNS rebinding), no forwarding header (not a tunnel
+# or reverse proxy on this box), and no cross-site page (not CSRF).
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_PROXY_HEADERS = ("forwarded", "x-forwarded-for", "x-forwarded-host",
+                  "x-real-ip", "cf-connecting-ip")
+
+
+def _is_loopback(hostname: str | None) -> bool:
+    return (hostname or "").lower() in _LOOPBACK_HOSTS
+
+
+def _url_hostname(url: str) -> str | None:
+    """Hostname of a URL or //host:port, or None when malformed."""
+    try:
+        return urlsplit(url).hostname
+    except ValueError:
+        return None
+
+
+def is_owner_browser(client_host: str | None, headers: Mapping[str, str]) -> bool:
+    """True only for a direct request from a page served on this machine."""
+    if not _is_loopback(client_host):
+        return False
+    if not _is_loopback(_url_hostname("//" + headers.get("host", ""))):
+        return False
+    if any(headers.get(name) for name in _PROXY_HEADERS):
+        return False
+    origin = headers.get("origin")
+    if origin is not None and not _is_loopback(_url_hostname(origin)):
+        return False
+    return headers.get("sec-fetch-site", "") != "cross-site"
+
+
+def single_mode_owner(client_host: str | None,
+                      headers: Mapping[str, str]) -> dict[str, Any] | None:
+    """The owner account under AUTH_MODE=single for the owner's browser, else None."""
+    if config.AUTH_MODE != "single" or not is_owner_browser(client_host, headers):
+        return None
+    return db.first_user()

@@ -16,16 +16,23 @@ if [ ! -x "$ROOT/backend/.venv/bin/python" ]; then
 fi
 "$ROOT/backend/.venv/bin/pip" install -q -r "$ROOT/backend/requirements.txt"
 
-# 2. Login password ------------------------------------------------------
-# The backend creates its one login user from AUTH_PASSWORD at first
-# start. On a fresh clone we generate a password so the first run just
-# works; the value stays in backend/.env for every later run.
-step "Checking the login password"
+# 2. Login ---------------------------------------------------------------
+# ./start serves only this machine, so the owner's browser needs no
+# login page (AUTH_MODE=single, decision 016). An AUTH_MODE line the
+# owner wrote is never touched. The backend still creates its one user
+# from AUTH_PASSWORD at first start; on a fresh clone we generate one,
+# so switching to AUTH_MODE=multi later has a working password.
+step "Checking the login settings"
 touch "$ROOT/backend/.env"
+if ! grep -qE '^AUTH_MODE=' "$ROOT/backend/.env"; then
+  printf '\nAUTH_MODE=single\n' >> "$ROOT/backend/.env"
+  echo "No login page on this machine (AUTH_MODE=single in backend/.env)."
+fi
 if ! grep -qE '^AUTH_PASSWORD=[^[:space:]#]+' "$ROOT/backend/.env"; then
   GENERATED="$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 16)"
   printf '\nAUTH_PASSWORD=%s\n' "$GENERATED" >> "$ROOT/backend/.env"
-  echo "Generated a login password for the reviewer account."
+  echo "Generated a password for the reviewer account. You only need it"
+  echo "if you set AUTH_MODE=multi to share this tool with other people."
   echo "  username: reviewer"
   echo "  password: $GENERATED"
   echo "This password stays in backend/.env. Keep that file private."
@@ -48,13 +55,13 @@ step "Checking the search database"
 BLASTDB_DIR="$(grep -E '^BLASTDB=' "$ROOT/backend/.env" | tail -1 | cut -d= -f2- | tr -d ' "')"
 if [ -z "$BLASTDB_DIR" ]; then
   echo "NOTE: BLASTDB is not set in backend/.env; using $HOME/blastdb."
-  echo "The tool opens either way: after login, open Settings -> Local BLAST"
+  echo "The tool opens either way: open Settings -> Local BLAST"
   echo "setup and press \"Run setup now\" to download and build the database,"
   echo "or use the \"real NCBI\" backend per workflow in the meantime."
   BLASTDB_DIR="$HOME/blastdb"
 fi
 if ! ls "$BLASTDB_DIR"/swissprot.* >/dev/null 2>&1; then
-  echo "NOTE: no database in $BLASTDB_DIR yet. After login, Settings -> Local"
+  echo "NOTE: no database in $BLASTDB_DIR yet. Settings -> Local"
   echo "BLAST setup -> \"Run setup now\" downloads and builds it for you."
 else
   echo "Found a local database in $BLASTDB_DIR."

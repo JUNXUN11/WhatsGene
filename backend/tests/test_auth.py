@@ -18,6 +18,9 @@ class Base(unittest.TestCase):
         self._old_user = config.AUTH_USERNAME
         self._old_pw = config.AUTH_PASSWORD
         self._old_cookie = config.COOKIE_SAMESITE, config.COOKIE_SECURE
+        self._old_mode = config.AUTH_MODE
+        # A ./start backend/.env says single; these tests cover login.
+        config.AUTH_MODE = "multi"
         config.DATABASE_PATH = Path(self._tmp.name) / "test.db"
         config.AUTH_USERNAME = "reviewer"
         config.AUTH_PASSWORD = "s3cret-review"
@@ -31,6 +34,7 @@ class Base(unittest.TestCase):
         config.AUTH_USERNAME = self._old_user
         config.AUTH_PASSWORD = self._old_pw
         config.COOKIE_SAMESITE, config.COOKIE_SECURE = self._old_cookie
+        config.AUTH_MODE = self._old_mode
         self._tmp.cleanup()
 
 
@@ -151,6 +155,83 @@ class TestLoginFlow(Base):
             self.assertEqual(client.get("/jobs").json(), [])
             self.assertEqual(
                 client.post(f"/jobs/{job['id']}/ask", json={"question": "q?"}).status_code, 404)
+
+
+class TestSingleMode(Base):
+    """AUTH_MODE=single: the owner's own browser skips login (decision 016)."""
+
+    LOCAL = "http://127.0.0.1:8000"
+
+    def setUp(self) -> None:
+        super().setUp()
+        config.AUTH_MODE = "single"
+
+    def _client(self, base_url: str = LOCAL, client_host: str = "127.0.0.1"):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        return TestClient(app, base_url=base_url, client=(client_host, 50000))
+
+    def test_owner_browser_is_signed_in(self):
+        with self._client() as client:
+            me = client.get("/auth/me").json()
+            self.assertTrue(me["authenticated"])
+            self.assertTrue(me["auto"])
+            self.assertEqual(me["username"], "reviewer")
+            self.assertEqual(client.get("/jobs").status_code, 200)
+            self.assertEqual(client.post("/jobs", json={"sequence": "NP_000509"}).status_code, 201)
+
+    def test_localhost_and_ipv6_hosts_count(self):
+        with self._client(base_url="http://localhost:8000") as client:
+            self.assertTrue(client.get("/auth/me").json()["authenticated"])
+        with self._client(base_url="http://[::1]:8000", client_host="::1") as client:
+            self.assertTrue(client.get("/auth/me").json()["authenticated"])
+
+    def test_network_client_must_log_in(self):
+        with self._client(client_host="192.168.1.20") as client:
+            self.assertFalse(client.get("/auth/me").json()["authenticated"])
+            self.assertEqual(client.get("/jobs").status_code, 401)
+            client.post("/auth/login", json={"username": "reviewer", "password": "s3cret-review"})
+            me = client.get("/auth/me").json()
+            self.assertTrue(me["authenticated"])
+            self.assertFalse(me["auto"])
+
+    def test_dns_rebinding_host_is_refused(self):
+        with self._client(base_url="http://evil.example:8000") as client:
+            self.assertEqual(client.get("/jobs").status_code, 401)
+
+    def test_proxied_request_is_refused(self):
+        # A tunnel or reverse proxy on this machine connects from loopback.
+        for header in ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP"):
+            with self._client() as client:
+                res = client.get("/jobs", headers={header: "203.0.113.9"})
+                self.assertEqual(res.status_code, 401, header)
+
+    def test_cross_site_page_is_refused(self):
+        with self._client() as client:
+            self.assertEqual(client.post("/jobs", json={"sequence": "NP_000509"},
+                                         headers={"Origin": "https://evil.example"}).status_code, 401)
+            self.assertEqual(client.get("/jobs", headers={"Sec-Fetch-Site": "cross-site"}).status_code, 401)
+            self.assertEqual(client.get("/jobs", headers={"Origin": "null"}).status_code, 401)
+            self.assertEqual(client.get("/jobs", headers={"Origin": "http://127.0.0.1:8000",
+                                                         "Sec-Fetch-Site": "same-origin"}).status_code, 200)
+
+    def test_malformed_host_is_refused_not_crashed(self):
+        self.assertFalse(auth.is_owner_browser("127.0.0.1", {"host": "[::1"}))
+        self.assertFalse(auth.is_owner_browser("127.0.0.1", {"host": "127.0.0.1", "origin": "http://[bad"}))
+
+    def test_multi_mode_ignores_owner_browser(self):
+        config.AUTH_MODE = "multi"
+        with self._client() as client:
+            self.assertFalse(client.get("/auth/me").json()["authenticated"])
+            self.assertEqual(client.get("/jobs").status_code, 401)
+
+    def test_seeds_owner_without_password(self):
+        config.AUTH_PASSWORD = ""
+        user = auth.ensure_seeded_user()
+        self.assertIsNotNone(user)
+        self.assertEqual(db.first_user()["id"], user["id"])
 
 
 if __name__ == "__main__":

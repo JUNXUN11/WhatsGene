@@ -28,5 +28,5 @@ else
   git clone "$REPO" "$DIR"
 fi
 
-echo "==> Starting WhatsGene (first run builds the website and prints a login password)"
+echo "==> Starting WhatsGene (first run builds the website)"
 cd "$DIR" && exec ./start

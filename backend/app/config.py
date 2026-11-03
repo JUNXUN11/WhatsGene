@@ -80,6 +80,13 @@ MODEL_TIMEOUT_SECONDS: float = float(_env("MODEL_TIMEOUT_SECONDS", "60") or "60"
 # --- Auth: one seeded user, no signup (decision 007) ---
 AUTH_USERNAME: str = _env("AUTH_USERNAME", "reviewer")
 AUTH_PASSWORD: str = _env("AUTH_PASSWORD")
+# Login mode (decision 016). multi (default): every browser logs in.
+# single: the owner's own browser on this machine is signed in as the
+# first user with no login page; ./start writes this. Any request that
+# arrives over the network or through a proxy still needs a login.
+AUTH_MODE: str = _env("AUTH_MODE", "multi").lower()
+if AUTH_MODE not in ("single", "multi"):
+    AUTH_MODE = "multi"
 COOKIE_SECURE: bool = _env("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 # Session cookie SameSite policy. "lax" (default) is correct when page and
 # API share one site (single-domain compose). Split hosting — frontend on

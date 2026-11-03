@@ -113,7 +113,9 @@ BLASTDB=/path/to/your/blastdb
 ```
 
 That is the only line `./start` needs.
-The first run generates a login password, prints it once, and stores it as `AUTH_PASSWORD` in `backend/.env`.
+The first run writes `AUTH_MODE=single` in `backend/.env`, so the browser on your own machine opens the tool with no login page.
+The first run also generates a password, prints it once, and stores it as `AUTH_PASSWORD` in `backend/.env`.
+You need that password only if you share the tool with other people (see "Share the tool with other people" below).
 `SEARCH_BACKEND` already means local, and `DATABASE_PATH` already means `./whatsgene.db`.
 If you start the backend by hand instead of `./start`, you must set `AUTH_PASSWORD` yourself before the first start.
 The backend creates the login user once, at the first start, from that value.
@@ -152,7 +154,7 @@ npm run dev   # http://localhost:3000
 ## Step 5: Run your first search
 
 Open `http://127.0.0.1:8000` in your browser (`./start` already opens it).
-Log in with the user name `reviewer` and the password from Step 3, or the generated password that `./start` printed.
+The tool opens on New search with no login page.
 Open New search and paste the accession `P68871`.
 Write the question `Identify this protein` and press Run.
 The workflow reaches the done status in seconds on a local database.
@@ -163,7 +165,22 @@ For that case, paste the sequence text, or pick the real NCBI choice for that on
 
 If the page does not load, make sure that `./start` still runs.
 If a search reports a missing database, make sure that `BLASTDB` names the folder from Step 2.
-If login fails on the first day, make sure that the password in the browser matches `AUTH_PASSWORD` in `backend/.env`.
+If you see a login page, open the tool at `http://127.0.0.1:8000` or `http://localhost:8000`, not at the address of your network card.
+
+## Share the tool with other people
+
+Each person who uses the tool on the same machine or server needs a login.
+To turn on the login page, set this line in `backend/.env` and restart the tool:
+
+```bash
+AUTH_MODE=multi
+```
+
+Then every browser logs in with the user name `reviewer` and `AUTH_PASSWORD` from `backend/.env`.
+The Docker setup in `docs/HOSTING.md` always uses `AUTH_MODE=multi`.
+With `AUTH_MODE=single`, a request from another machine, or through a proxy or a tunnel, still gets the login page.
+Sign-up stays off in both modes.
+The decision record is `docs/decisions/016-auth-mode-single-or-multi.md`.
 
 ## Run the backend on another machine
 
@@ -250,7 +267,7 @@ code validates, copies, builds, searches, and classifies.
 
 PSI-BLAST, PHI-BLAST, HMMER, Tajima tests, and bootstrap values are not in the tool.
 The MSA and tree rules come from the course decks, and the tool invents no rule for those steps.
-User accounts for teams are not in the tool, and the single login user guards the demo.
+Separate accounts for each person are not in the tool yet: `AUTH_MODE=multi` gives one shared login.
 The decision record for the local tool direction is `docs/decisions/008-local-tool-own-server.md`.
 
 ## License

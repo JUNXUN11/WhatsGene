@@ -402,6 +402,13 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def first_user() -> dict[str, Any] | None:
+    """The owner: the oldest account (the seeded user)."""
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
 def user_count() -> int:
     with _connect() as conn:
         row = conn.execute("SELECT COUNT(*) FROM users").fetchone()

@@ -1,8 +1,11 @@
 // Single-user auth state. The backend session cookie is the source of
-// truth; this only caches /auth/me so the nav and guards agree.
+// truth; this only caches /auth/me so the nav and guards agree. auto
+// means AUTH_MODE=single signed the owner in: there is nothing to log
+// out of, so the nav hides Log out.
 export function useAuth() {
   const status = useState<'unknown' | 'in' | 'out'>('auth-status', () => 'unknown')
   const username = useState<string | null>('auth-user', () => null)
+  const auto = useState<boolean>('auth-auto', () => false)
   const { login: apiLogin, logout: apiLogout, me } = useApi()
 
   async function ensure(): Promise<boolean> {
@@ -11,9 +14,11 @@ export function useAuth() {
       const res = await me()
       status.value = res.authenticated ? 'in' : 'out'
       username.value = res.username || null
+      auto.value = !!res.auto
     } catch {
       status.value = 'out'
       username.value = null
+      auto.value = false
     }
     return status.value === 'in'
   }
@@ -34,5 +39,5 @@ export function useAuth() {
     username.value = null
   }
 
-  return { status, username, ensure, login, logout }
+  return { status, username, auto, ensure, login, logout }
 }

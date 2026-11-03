@@ -110,8 +110,8 @@ export function useApi() {
     await $fetch(`${base}/auth/logout`, { ...withCreds, method: 'POST' })
   }
 
-  async function me(): Promise<{ authenticated: boolean; username?: string }> {
-    return await $fetch<{ authenticated: boolean; username?: string }>(`${base}/auth/me`, withCreds)
+  async function me(): Promise<{ authenticated: boolean; username?: string; auto?: boolean }> {
+    return await $fetch<{ authenticated: boolean; username?: string; auto?: boolean }>(`${base}/auth/me`, withCreds)
   }
 
   async function createJob(sequence: string, question: string, options: JobCreateOptions = {}): Promise<Job> {
