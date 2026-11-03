@@ -35,7 +35,6 @@ async function copyInstall() {
 <template>
   <main class="page">
     <section class="hero">
-      <p class="kicker">Open-source BLAST workflows for occasional users</p>
       <h1>Your own local BLAST</h1>
       <div class="install-box" role="group" aria-label="Install command">
         <code class="mono">{{ installCmd }}</code>
@@ -43,10 +42,10 @@ async function copyInstall() {
       </div>
       <ol class="install-steps">
         <li><strong>Copy</strong> the command above.</li>
-        <li><strong>Open Terminal</strong> (Mac: press ⌘ Space, type Terminal), paste the command, and press Enter. The first run takes a few minutes.</li>
-        <li><strong>Your browser opens WhatsGene.</strong> Create your account, then press <em>Run setup now</em> to build the search database once.</li>
+        <li><strong>Open Terminal</strong> (Mac: press ⌘ Space, type Terminal. Windows: run <code class="mono">wsl --install</code> once in PowerShell, restart, then open <em>Ubuntu</em> from the Start menu), paste the command, and press Enter. The first run takes a few minutes.</li>
+        <li><strong>Your browser opens WhatsGene.</strong> (Windows: open <code class="mono">http://127.0.0.1:8000</code> yourself if it does not.) Create your account, then press <em>Run setup now</em> to build the search database once.</li>
       </ol>
-      <p class="hint">Keep Terminal open while you use WhatsGene; Ctrl+C stops it. Next time, run <code class="mono">cd ~/WhatsGene &amp;&amp; ./start</code>. Needs Git, Python 3.12+, Node 20+ and NCBI BLAST+ (Mac: <code class="mono">brew install blast</code>).</p>
+      <p class="hint">Keep Terminal open while you use WhatsGene; Ctrl+C stops it. Next time, run <code class="mono">cd ~/WhatsGene &amp;&amp; ./start</code>. Needs Git, Python 3.12+, Node 20+ and NCBI BLAST+ (Mac: <code class="mono">brew install blast</code>; Windows Ubuntu: <code class="mono">sudo apt-get install -y ncbi-blast+</code>).</p>
       <div class="hero-grid">
         <div>
           <p class="lede">
@@ -129,8 +128,11 @@ async function copyInstall() {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  margin: 18px 0 8px;
+  margin: 36px 0 8px;
   overflow: hidden;
+}
+.hero-grid {
+  margin-top: 64px;
 }
 .install-box code {
   flex: 1;
@@ -151,7 +153,7 @@ async function copyInstall() {
   white-space: nowrap;
 }
 .install-steps {
-  margin: 12px 0 6px;
+  margin: 12px 0 18px;
   padding-left: 22px;
   display: grid;
   gap: 4px;
