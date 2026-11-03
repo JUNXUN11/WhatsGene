@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import type { LocalDatabase } from '~/composables/useApi'
+
 definePageMeta({ middleware: 'auth' })
 
-const { createJob } = useApi()
+const { createJob, getSettings, listDatabases } = useApi()
+const strictnessLabel = ref('')
 const router = useRouter()
 const route = useRoute()
 
@@ -12,6 +15,8 @@ const mode = ref<'auto' | 'single' | 'all'>('auto')
 const program = ref('blastp')
 const whatsapp = ref('')
 const searchBackend = ref<'server' | 'local' | 'ncbi'>('server')
+const database = ref('')
+const databases = ref<LocalDatabase[]>([])
 const busy = ref(false)
 const error = ref('')
 const showSubmitConfirm = ref(false)
@@ -35,7 +40,14 @@ const isDirty = computed(() => {
     || program.value !== 'blastp'
     || whatsapp.value.trim() !== ''
     || searchBackend.value !== 'server'
+    || database.value !== ''
 })
+
+const selectedDatabase = computed(() => databases.value.find(d => d.name === database.value) || null)
+const databaseDisabled = computed(() => mode.value === 'all' || searchBackend.value === 'ncbi')
+const databaseLabel = computed(() => selectedDatabase.value
+  ? `${selectedDatabase.value.label} (${selectedDatabase.value.dbtype})`
+  : 'Auto — WhatsGene chooses')
 
 const modeLabel = computed(() => {
   if (mode.value === 'auto') return 'Auto (rules engine picks)'
@@ -54,13 +66,36 @@ const samples = [
   { label: '12-aa short query', sequence: 'PNLHGLFGRKTG', question: 'What is this short peptide?' },
 ]
 
-onMounted(() => {
+onMounted(async () => {
   const q = route.query
   if (typeof q.sequence === 'string' && q.sequence) sequence.value = q.sequence
   if (typeof q.question === 'string' && q.question) {
     question.value = q.question
     optionsOpen.value = true
   }
+  // Settings defaults pre-fill the form; anything typed or linked wins.
+  try {
+    const res = await getSettings()
+    if (!organism.value && res.settings.default_organism) organism.value = res.settings.default_organism
+    searchBackend.value = res.settings.default_backend
+    strictnessLabel.value = res.presets[res.settings.strictness]?.label || res.settings.strictness
+  } catch {
+    // Defaults are a convenience; the form works with server defaults.
+  }
+  try {
+    databases.value = await listDatabases()
+    const wanted = route.query.database
+    if (typeof wanted === 'string' && databases.value.some(d => d.name === wanted && d.ready)) {
+      database.value = wanted
+      optionsOpen.value = true
+    }
+  } catch {
+    // The picker is optional; Auto still works without the catalog.
+  }
+})
+
+watch([mode, searchBackend], () => {
+  if (databaseDisabled.value) database.value = ''
 })
 
 function useSample(s: (typeof samples)[number]) {
@@ -104,6 +139,7 @@ function resetForm() {
   program.value = 'blastp'
   whatsapp.value = ''
   searchBackend.value = 'server'
+  database.value = ''
   error.value = ''
   showResetConfirm.value = false
 }
@@ -136,6 +172,7 @@ async function confirmSubmit() {
       workflow_mode: mode.value,
       search_backend: searchBackend.value,
       program: mode.value === 'single' ? program.value : null,
+      database: databaseDisabled.value ? null : (database.value || null),
       whatsapp_number: whatsapp.value.trim() || null,
     })
     await router.push(`/jobs/${job.id}`)
@@ -209,6 +246,16 @@ async function confirmSubmit() {
               <option value="local">Local BLAST — this server, Swiss-Prot, private</option>
               <option value="ncbi">Real NCBI BLAST — all programs and databases, slower</option>
             </select>
+            <label for="database">Local database</label>
+            <select id="database" v-model="database" class="select" :disabled="databaseDisabled">
+              <option value="">Auto — WhatsGene chooses</option>
+              <option v-for="db in databases" :key="db.name" :value="db.name" :disabled="!db.ready">
+                {{ db.label }} ({{ db.dbtype }}){{ db.ready ? '' : ' — not built' }}
+              </option>
+            </select>
+            <p v-if="selectedDatabase" class="hint">{{ selectedDatabase.description }}</p>
+            <p v-else-if="databaseDisabled" class="hint">Database choice needs Auto or one program, on Local BLAST.</p>
+            <p v-if="strictnessLabel" class="hint">Hit collection: {{ strictnessLabel }} — from <NuxtLink to="/settings">Settings</NuxtLink>, where you can also set your own judging cut-offs.</p>
           </fieldset>
 
           <fieldset>
@@ -241,6 +288,7 @@ async function confirmSubmit() {
         <div><dt>Question</dt><dd>{{ fullQuestion() || 'Identify this sequence' }}</dd></div>
         <div><dt>Program</dt><dd>{{ modeLabel }}</dd></div>
         <div><dt>Search on</dt><dd>{{ backendLabels[searchBackend] }}</dd></div>
+        <div><dt>Database</dt><dd>{{ databaseLabel }}</dd></div>
       </dl>
       <p v-else class="confirm-progress">
         <span class="spinner" aria-hidden="true" />

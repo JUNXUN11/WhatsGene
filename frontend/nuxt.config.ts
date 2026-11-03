@@ -12,6 +12,9 @@ export default defineNuxtConfig({
   app: {
     head: {
       title: 'WhatsGene — Find a gene, without watching BLAST',
+      link: [
+        { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
+      ],
       meta: [
         { name: 'description', content: 'WhatsGene picks the BLAST program, runs NCBI BLAST in the background, confirms the top hit, and WhatsApps you the result.' },
       ],
