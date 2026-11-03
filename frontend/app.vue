@@ -85,7 +85,7 @@ function shortQuestion(job: Job): string {
 </script>
 
 <template>
-  <div>
+  <div :class="{ 'with-sidebar': showSidebar }">
     <header class="site-header" :class="{ 'site-header-app': showSidebar }">
       <div class="header-inner">
         <NuxtLink :to="status === 'in' ? '/new' : '/'" class="brand">

@@ -59,7 +59,19 @@ git clone <REPO_URL> whatsgene
 cd whatsgene
 ```
 
+Or paste this one line in a terminal (Mac or Linux) and skip to Step 4:
+it downloads the code, starts the tool, and opens your browser.
+
+```bash
+curl -fsSL <REPO_URL_RAW>/install.sh | bash
+```
+
 ## Step 2: Build the search database
+
+Skip this step on your first day: after the tool starts (Step 4), open
+Settings → Local BLAST setup and press **Run setup now**. The wizard
+downloads and builds this database and proves it before trusting it.
+The manual commands below stay for custom setups.
 
 The search database holds the reference sequences that BLAST searches.
 You build this database once, and every later search reuses the same build.
@@ -94,16 +106,16 @@ cd backend
 cp .env.example .env
 ```
 
-In `backend/.env`, set these four lines with your own paths and your own password:
+In `backend/.env`, set one line to the folder from Step 2:
 
 ```bash
-SEARCH_BACKEND=local
 BLASTDB=/path/to/your/blastdb
-DATABASE_PATH=./whatsgene.db
-AUTH_PASSWORD=a-long-password-that-you-choose
 ```
 
-You must set `AUTH_PASSWORD` before the first backend start.
+That is the only line `./start` needs.
+The first run generates a login password, prints it once, and stores it as `AUTH_PASSWORD` in `backend/.env`.
+`SEARCH_BACKEND` already means local, and `DATABASE_PATH` already means `./whatsgene.db`.
+If you start the backend by hand instead of `./start`, you must set `AUTH_PASSWORD` yourself before the first start.
 The backend creates the login user once, at the first start, from that value.
 A later edit of the value does not change the created user.
 To move your history to a new machine, copy the results file while the backend is stopped.
@@ -111,9 +123,18 @@ To use a different search database, change `BLASTDB` to the new folder and resta
 
 ## Step 4: Start the tool
 
+One command starts the whole tool.
+It prepares the Python environment, builds the website on the first run, starts the backend, and opens your browser.
+The tool runs at `http://127.0.0.1:8000`, and only on your machine.
+Stop it with Ctrl+C.
+
+```bash
+./start
+```
+
+Developers can still run the two parts by hand.
 The backend runs in terminal 1, and the website runs in terminal 2.
 You keep both terminals open while you use the tool.
-The website reads the backend address from `NUXT_PUBLIC_API_BASE`, and the address in `frontend/.env.example` already fits one machine.
 
 ```bash
 # Terminal 1
@@ -125,13 +146,13 @@ uvicorn app.main:app --reload --port 8000
 # Terminal 2
 cd frontend
 npm install
-npm run dev
+npm run dev   # http://localhost:3000
 ```
 
 ## Step 5: Run your first search
 
-Open `http://localhost:3000` in your browser.
-Log in with the user name `reviewer` and the password from Step 3.
+Open `http://127.0.0.1:8000` in your browser (`./start` already opens it).
+Log in with the user name `reviewer` and the password from Step 3, or the generated password that `./start` printed.
 Open New search and paste the accession `P68871`.
 Write the question `Identify this protein` and press Run.
 The workflow reaches the done status in seconds on a local database.
@@ -140,7 +161,7 @@ The results page shows the top hit, the exact parameters, and the step log for t
 A RefSeq accession such as `NP_000509` is not in the SwissProt copy, so local mode cannot fetch that accession.
 For that case, paste the sequence text, or pick the real NCBI choice for that one workflow.
 
-If the page does not load, make sure that both terminals still run.
+If the page does not load, make sure that `./start` still runs.
 If a search reports a missing database, make sure that `BLASTDB` names the folder from Step 2.
 If login fails on the first day, make sure that the password in the browser matches `AUTH_PASSWORD` in `backend/.env`.
 
@@ -171,13 +192,12 @@ The WhatsApp notice sends a phone number and a summary to Meta only if you fill 
 
 ## Limits of local mode
 
-Local mode searches protein sequences against the SwissProt copy from Step 2.
-This install also carries extra NCBI-sourced databases built locally in `~/blastdb`
+Local mode searches against the databases in your `BLASTDB` folder.
+Step 2 builds the SwissProt copy; the Library page builds small extras on top
 (PDB proteins, RefSeq viral proteins, 16S rRNA, fungi ITS, mitochondrion and viral
-genomes — about 1 GB of sources, built with `makeblastdb` because NCBI prebuilt
-files do not open on Apple Silicon). They serve local `blastp`/`blastn` searches
-when a workflow names them; `tblastn`/`blastx` still need the real NCBI choice.
-WhatsApp outbound delivery waits for Meta business verification, so the website is the entry point today.
+genomes — each built with `makeblastdb` from NCBI sources).
+Local search runs `blastp` and `blastn`; `tblastn` and `blastx` need the real NCBI choice.
+WhatsApp outbound delivery waits for Meta business verification.
 The full science rules live in `docs/blast-rules.md`, and the product rules live in `docs/PRD.md`.
 
 ## Tests

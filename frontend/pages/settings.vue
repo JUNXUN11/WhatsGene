@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { AiSetupResponse, SettingsResponse, UserSettings } from '~/composables/useApi'
+import type { AiSetupResponse, SettingsResponse, SetupRunState, UserSettings } from '~/composables/useApi'
 
 definePageMeta({ middleware: 'auth' })
 
-const { getSettings, saveSettings, aiSetup } = useApi()
+const { getSettings, saveSettings, aiSetup, runSetup, setupStatus } = useApi()
 const { push: pushToast } = useToasts()
 
 const form = ref<UserSettings>({
@@ -32,6 +32,9 @@ const setupMessage = ref('')
 const setupBusy = ref(false)
 const setupResult = ref<AiSetupResponse | null>(null)
 const setupError = ref('')
+const runState = ref<SetupRunState | null>(null)
+const runError = ref('')
+let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const backendOptions = [
   { value: 'server', label: 'Server default — whatever this install is configured for' },
@@ -50,7 +53,8 @@ const tabs = [
 const activeTab = ref<(typeof tabs)[number]['id']>('ai')
 
 const stepMarks: Record<string, string> = {
-  done: 'Done', needed: 'Needed', pending: 'Later', demo_only: 'Demo only',
+  done: 'Done', needed: 'Needed', pending: 'Waiting', demo_only: 'Plan only',
+  running: 'Running', skipped: 'Skipped', failed: 'Failed',
 }
 
 async function load() {
@@ -70,7 +74,11 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  await refreshRunState()
+  if (runState.value?.running) startPolling()
+})
 
 async function save() {
   error.value = ''
@@ -118,6 +126,41 @@ async function askAssistant() {
   }
 }
 
+async function refreshRunState() {
+  try {
+    runState.value = await setupStatus()
+    if (runState.value.setup) setup.value = runState.value.setup
+    if (!runState.value.running) stopPolling()
+  } catch {
+    // Keep the last known state; the next poll retries.
+  }
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(refreshRunState, 1500)
+}
+
+async function startSetup() {
+  runError.value = ''
+  try {
+    runState.value = await runSetup(dbChoice.value)
+    if (runState.value.running) startPolling()
+  } catch (e: unknown) {
+    const err = e as { data?: { detail?: string }; message?: string }
+    runError.value = err.data?.detail || err.message || 'Setup could not start.'
+  }
+}
+
+onBeforeUnmount(stopPolling)
+
 function useStandard() {
   if (standardCutoffs.value) form.value.cutoffs = { ...standardCutoffs.value }
 }
@@ -164,15 +207,35 @@ function useStandard() {
 
       <div v-show="activeTab === 'setup'">
       <fieldset>
-        <legend>Set up local BLAST — with Muse</legend>
+        <legend>Set up local BLAST</legend>
+        <p class="hint" style="margin-top: 4px;">Press Run setup and WhatsGene does the work: checks BLAST+, downloads the database files (about 170 MB), builds the database, and proves it with a known accession before trusting it. Muse can explain the plan; code runs every step.</p>
         <label for="db-choice">Database to set up</label>
         <select id="db-choice" v-model="dbChoice" class="select">
           <option v-for="(o, key) in databaseOptions" :key="key" :value="key">{{ o.label }}</option>
         </select>
+        <div class="submit-row">
+          <button class="btn" type="button" :disabled="runState?.running" @click="startSetup">{{ runState?.running ? 'Setting up…' : 'Run setup now' }}</button>
+          <span v-if="runState && runState.status === 'done'" class="status-pill status-done">Setup done</span>
+          <span v-else-if="runState && runState.status === 'failed'" class="status-pill status-failed">Setup stopped</span>
+        </div>
+        <p v-if="runError" class="error">{{ runError }}</p>
+        <div v-if="runState && runState.status !== 'idle'" class="assistant-result">
+          <ol class="step-list">
+            <li v-for="s in runState.steps" :key="s.id">
+              <span class="step-mark" :class="`mark-${s.status}`">{{ stepMarks[s.status] || s.status }}</span>
+              <span><strong>{{ s.title }}</strong><span v-if="s.detail"> — {{ s.detail }}</span></span>
+            </li>
+          </ol>
+          <ol v-if="runState.log.length" class="setup-log mono">
+            <li v-for="(line, i) in runState.log" :key="i">{{ line }}</li>
+          </ol>
+          <p v-if="runState.status === 'done'" class="hint">Local search is ready. <NuxtLink to="/new">Run your first search →</NuxtLink></p>
+          <p v-if="runState.status === 'failed'" class="hint">Read the last step above for the real error, fix it, then press Run setup again. Nothing is faked: a step only says Done after the code proves it.</p>
+        </div>
         <label for="setup-msg">Tell Muse about your work (optional)</label>
         <input id="setup-msg" v-model="setupMessage" type="text" placeholder="e.g. I search worm proteins and want fast private runs">
         <div class="submit-row">
-          <button class="btn" type="button" :disabled="setupBusy" @click="askAssistant">{{ setupBusy ? 'Asking…' : 'Ask Muse to plan my setup' }}</button>
+          <button class="btn btn-secondary" type="button" :disabled="setupBusy" @click="askAssistant">{{ setupBusy ? 'Asking…' : 'Ask Muse to explain the plan' }}</button>
         </div>
         <p v-if="setupError" class="error">{{ setupError }}</p>
         <div v-if="setupResult" class="assistant-result">
@@ -185,7 +248,6 @@ function useStandard() {
           </ol>
           <p class="assistant-reply">{{ setupResult.reply }}</p>
         </div>
-        <p class="hint">Demo boundary: Muse plans and explains; the download and build steps are shown, not executed yet. Each real step will run only approved code and will be logged.</p>
       </fieldset>
 
       <fieldset v-if="setup">
@@ -294,7 +356,8 @@ function useStandard() {
 .cutoff-list dt { font-weight: 600; font-size: 13.5px; color: var(--ink-2); }
 .cutoff-list dd { margin: 0; font-size: 13.5px; color: var(--ink); text-align: right; }
 .cutoff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 10px; }
-.submit-row { display: flex; gap: 10px; margin-top: 20px; }
+.setup-log { margin: 10px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.submit-row { display: flex; gap: 12px; margin-top: 20px; align-items: center; flex-wrap: wrap; }
 .muse-status { margin-top: 10px; }
 .assistant-result { margin-top: 14px; }
 .assistant-mode { font-size: 13px; font-weight: 650; color: var(--ink-2); margin: 0 0 8px; }

@@ -223,9 +223,9 @@ DATABASE_OPTIONS: dict[str, dict[str, str]] = {
 def setup_plan(database_choice: str = "swissprot") -> dict[str, Any]:
     """Deterministic setup plan from live machine checks (no side effects).
 
-    Demo contract: steps report real status (BLAST+ found, database ready)
-    and mark the mutating steps demo_only — the assistant explains and
-    guides; a later build wires the same steps to approved commands.
+    Steps report real status (BLAST+ found, database ready). The same
+    step ids execute for real in setup_runner; the assistant only
+    explains and guides.
     """
     choice = DATABASE_OPTIONS.get(database_choice) or DATABASE_OPTIONS["swissprot"]
     status = setup_status()
@@ -238,11 +238,11 @@ def setup_plan(database_choice: str = "swissprot") -> dict[str, Any]:
         {"id": "choose_db", "title": f"Choose database: {choice['label']}",
          "status": "done", "detail": f"{choice['size']}. Source: {choice['source']}."},
         {"id": "download", "title": "Download the database files",
-         "status": "demo_only",
-         "detail": "Demo: no download runs yet. The real step fetches from NCBI and verifies the files before use."},
+         "status": "done" if status["local_db_ready"] else "needed",
+         "detail": "Fetches SwissProt FASTA and NCBI taxonomy, then extracts them. Runs from the Run setup button."},
         {"id": "build", "title": "Build the search database (makeblastdb)",
-         "status": "demo_only",
-         "detail": "Demo: no build runs yet. The real step runs makeblastdb with the taxonomy map, then proves it with blastdbcmd."},
+         "status": "done" if status["local_db_ready"] else "pending",
+         "detail": "Runs makeblastdb with the taxonomy map derived from FASTA headers, then proves it with blastdbcmd. Runs from the Run setup button."},
         {"id": "verify", "title": "Verify with a sample search",
          "status": "done" if status["local_db_ready"] else "pending",
          "detail": (f"Local database ready at {status['blastdb_path']}."
@@ -265,7 +265,7 @@ def setup_assistant_reply(*, database_choice: str, question: str,
     if question.strip():
         lines.append(f"You asked: {question.strip()[:200]}")
     if pending:
-        lines.append("Next: " + pending[0] + ". In this demo the download and build steps are shown, not executed.")
+        lines.append("Next: " + pending[0] + ". Press Run setup now and WhatsGene executes it.")
     else:
         lines.append("Everything is ready — local searches will run in seconds on this machine.")
     return "\n".join(lines)
@@ -278,12 +278,12 @@ def setup_status() -> dict[str, Any]:
     from pathlib import Path
 
     blastdb = os.environ.get("BLASTDB", "").strip()
-    db_dir = Path(blastdb) if blastdb else None
-    db_ready = bool(db_dir and db_dir.is_dir() and any(db_dir.glob("swissprot.*")))
+    db_dir = Path(blastdb) if blastdb else Path.home() / "blastdb"
+    db_ready = bool(db_dir.is_dir() and any(db_dir.glob("swissprot.*")))
     return {
         "search_backend": config.SEARCH_BACKEND,
         "blast_plus_installed": shutil.which("blastp") is not None,
-        "blastdb_path": blastdb,
+        "blastdb_path": str(db_dir),
         "local_db_ready": bool(db_ready),
     }
 

@@ -13,12 +13,16 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import (APIRouter, Depends, FastAPI, HTTPException, Query,
+                     Request, Response)
+from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import (agent, auth, chat, config, db, library,
+from . import (agent, auth, chat, config, db, library, setup_runner,
                settings as user_settings, whatsapp_client, worker)
 from .search_backend import (SearchError, get_backend, get_backend_for_choice,
                              local_database_catalog, local_database_entry)
@@ -48,6 +52,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Every API route lives on this router. It is included twice at the end
+# of this file: at the root (tests, tunnel, hosted frontend) and under
+# /api (the One Box frontend, which calls its own origin).
+api = APIRouter()
 
 
 class JobCreate(BaseModel):
@@ -120,12 +129,12 @@ def _owned_job(job_id: str, user: dict) -> dict:
     return job
 
 
-@app.get("/health")
+@api.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "whatsgene-backend"}
 
 
-@app.post("/auth/login")
+@api.post("/auth/login")
 def login(body: LoginBody, response: Response) -> dict:
     user = db.get_user_by_username((body.username or "").strip())
     if not user or not auth.verify_password(body.password or "", user["password_hash"]):
@@ -141,7 +150,7 @@ def login(body: LoginBody, response: Response) -> dict:
     return {"username": user["username"]}
 
 
-@app.post("/auth/logout")
+@api.post("/auth/logout")
 def logout(request: Request, response: Response) -> dict:
     token = request.cookies.get(auth.SESSION_COOKIE)
     if token:
@@ -152,7 +161,7 @@ def logout(request: Request, response: Response) -> dict:
     return {"status": "logged out"}
 
 
-@app.get("/auth/me")
+@api.get("/auth/me")
 def me(request: Request) -> dict:
     user = auth.resolve_session(request.cookies.get(auth.SESSION_COOKIE))
     if not user:
@@ -160,13 +169,13 @@ def me(request: Request) -> dict:
     return {"authenticated": True, "username": user["username"]}
 
 
-@app.get("/settings")
+@api.get("/settings")
 def get_settings(user: dict = Depends(current_user)) -> dict:
     """The caller's customization profile, presets, and setup status."""
     return user_settings.public_settings(user["id"])
 
 
-@app.put("/settings")
+@api.put("/settings")
 def put_settings(body: SettingsBody, user: dict = Depends(current_user)) -> dict:
     try:
         saved = user_settings.save_settings(user["id"], body.model_dump())
@@ -175,13 +184,13 @@ def put_settings(body: SettingsBody, user: dict = Depends(current_user)) -> dict
     return {"settings": saved, **user_settings.muse_key_hint(user["id"])}
 
 
-@app.post("/settings/ai-setup")
+@api.post("/settings/ai-setup")
 def ai_setup(body: AiSetupBody, user: dict = Depends(current_user)) -> dict:
-    """Muse-guided local BLAST setup (demo: plan + explanation, no writes).
+    """Muse-guided local BLAST setup (plan + explanation).
 
     With the user's own Muse key, a live model explains the deterministic
     plan; without one (or on any model failure) the scripted demo reply is
-    returned. Downloads/builds are never executed from here.
+    returned. Execution lives in POST /setup/run (fixed code, no model).
     """
     plan = user_settings.setup_plan(body.database or "swissprot")
     reply = user_settings.setup_assistant_reply(
@@ -199,7 +208,7 @@ def ai_setup(body: AiSetupBody, user: dict = Depends(current_user)) -> dict:
                 system=("You are the WhatsGene setup assistant for wet-lab scientists. "
                         "Explain the given local BLAST setup plan in plain language, short "
                         "sentences. Use only the facts given; never invent commands, "
-                        "thresholds, or results. Say clearly which steps are demo-only."),
+                        "thresholds, or results."),
                 user=f"SETUP FACTS:\n{facts}\n\nUSER MESSAGE: {(body.message or 'Help me set up local BLAST.')[:500]}",
                 max_tokens=config.MODEL_MAX_TOKENS, api_key=key,
                 base_url=profile.get("muse_base_url") or None,
@@ -211,7 +220,33 @@ def ai_setup(body: AiSetupBody, user: dict = Depends(current_user)) -> dict:
     return {"reply": reply, "mode": mode, "plan": plan}
 
 
-@app.get("/privacy")
+class SetupRunBody(BaseModel):
+    database: str = "swissprot"
+
+
+@api.post("/setup/run", status_code=202)
+def run_setup(body: SetupRunBody, user: dict = Depends(current_user)) -> dict:
+    """Run real local setup (download, build, verify) in the background.
+
+    Muse explains the plan; setup_runner executes fixed steps and
+    reports live state. One run at a time; a second POST while running
+    returns the running state instead of starting a duplicate.
+    """
+    if (body.database or "swissprot") != "swissprot":
+        raise HTTPException(status_code=422,
+                            detail="This wizard builds the SwissProt copy today. "
+                                   "Custom files go through the Library page.")
+    if setup_runner.is_running():
+        return setup_runner.get_state()
+    return setup_runner.start(body.database or "swissprot")
+
+
+@api.get("/setup/status")
+def setup_status(user: dict = Depends(current_user)) -> dict:
+    return setup_runner.get_state()
+
+
+@api.get("/privacy")
 def privacy() -> dict:
     """Public privacy policy (Meta app publishing requirement)."""
     return {
@@ -239,7 +274,7 @@ def _library_root(root: str):
     raise HTTPException(status_code=422, detail="root must be inbox or library.")
 
 
-@app.get("/library")
+@api.get("/library")
 def get_library(user: dict = Depends(current_user)) -> dict:
     """Inbox inventory + sorted library for the file-drop page."""
     return {
@@ -250,7 +285,7 @@ def get_library(user: dict = Depends(current_user)) -> dict:
     }
 
 
-@app.post("/library/sort")
+@api.post("/library/sort")
 def sort_library(body: LibrarySortBody, user: dict = Depends(current_user)) -> dict:
     """Copy user-confirmed inbox files into the library. Never moves."""
     try:
@@ -259,7 +294,7 @@ def sort_library(body: LibrarySortBody, user: dict = Depends(current_user)) -> d
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.post("/library/build-database")
+@api.post("/library/build-database")
 def build_database(body: LibraryBuildBody, user: dict = Depends(current_user)) -> dict:
     """Build a small custom BLAST database from one sorted FASTA file."""
     try:
@@ -269,7 +304,7 @@ def build_database(body: LibraryBuildBody, user: dict = Depends(current_user)) -
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.post("/library/build-from-taxon")
+@api.post("/library/build-from-taxon")
 def build_from_taxon(body: TaxonBuildBody, user: dict = Depends(current_user)) -> dict:
     """Build a small custom database: one taxon's SwissProt subset."""
     try:
@@ -278,7 +313,7 @@ def build_from_taxon(body: TaxonBuildBody, user: dict = Depends(current_user)) -
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.get("/library/query-text")
+@api.get("/library/query-text")
 def library_query_text(root: str = "library", path: str = "",
                        user: dict = Depends(current_user)) -> dict:
     """First searchable record of a sorted file, for one-click search."""
@@ -289,13 +324,13 @@ def library_query_text(root: str = "library", path: str = "",
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.get("/databases")
+@api.get("/databases")
 def list_databases(user: dict = Depends(current_user)) -> dict:
     """Local databases a workflow can name, with built/not-built status."""
     return {"databases": local_database_catalog()}
 
 
-@app.post("/jobs", status_code=201)
+@api.post("/jobs", status_code=201)
 def create_job(body: JobCreate, user: dict = Depends(current_user)) -> dict:
     """Queue a workflow and return at once; the worker runs it."""
     raw = (body.sequence or "").strip()
@@ -362,18 +397,18 @@ def create_job(body: JobCreate, user: dict = Depends(current_user)) -> dict:
     return _public_job(db.get_job(job["id"]) or job, user["id"])
 
 
-@app.get("/jobs")
+@api.get("/jobs")
 def list_jobs(limit: int = Query(default=50, le=200),
               user: dict = Depends(current_user)) -> list[dict]:
     return [_public_job(j, user["id"]) for j in db.list_jobs(limit=limit, user_id=user["id"])]
 
 
-@app.get("/jobs/{job_id}")
+@api.get("/jobs/{job_id}")
 def get_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     return _public_job(_owned_job(job_id, user), user["id"])
 
 
-@app.post("/jobs/{job_id}/align")
+@api.post("/jobs/{job_id}/align")
 def align_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     """Tier 2: MSA + neighbor-joining tree from confirmed homologs."""
     from .msa import MsaError, run_alignment
@@ -392,7 +427,7 @@ def align_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     return _public_job(final, user["id"])
 
 
-@app.post("/jobs/{job_id}/cancel")
+@api.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     job = _owned_job(job_id, user)
     if job["status"] in ("done", "failed", "cancelled"):
@@ -400,7 +435,7 @@ def cancel_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     return _public_job(db.update_job(job_id, status="cancelled") or job, user["id"])
 
 
-@app.delete("/jobs/{job_id}")
+@api.delete("/jobs/{job_id}")
 def delete_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     """Delete a finished workflow and its stored searches + step log."""
     _owned_job(job_id, user)
@@ -413,7 +448,7 @@ def delete_job(job_id: str, user: dict = Depends(current_user)) -> dict:
     return {"status": "deleted", "id": job_id}
 
 
-@app.post("/jobs/{job_id}/ask")
+@api.post("/jobs/{job_id}/ask")
 def ask_job(job_id: str, body: AskBody, user: dict = Depends(current_user)) -> dict:
     """Grounded Q&A over this workflow's stored results (web Ask box)."""
     job = _owned_job(job_id, user)
@@ -458,7 +493,7 @@ def _public_job(job: dict, user_id: int | None = None) -> dict:
 
 # --- WhatsApp webhook ---
 
-@app.get("/webhooks/whatsapp")
+@api.get("/webhooks/whatsapp")
 def whatsapp_verify(request: Request) -> object:
     params = request.query_params
     if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == config.WHATSAPP_VERIFY_TOKEN:
@@ -466,7 +501,7 @@ def whatsapp_verify(request: Request) -> object:
     raise HTTPException(status_code=403, detail="WhatsApp verification failed.")
 
 
-@app.post("/webhooks/whatsapp")
+@api.post("/webhooks/whatsapp")
 async def whatsapp_inbound(request: Request) -> dict:
     payload = await request.json()
     # TEMP DEBUG (delivery diagnosis): record every webhook payload,
@@ -498,3 +533,74 @@ async def whatsapp_inbound(request: Request) -> dict:
                         db.update_job(job["id"],
                                       whatsapp_status="sent" if sent.get("status") == "sent" else "failed")
     return {"status": "received", "replies": replies}
+
+
+# Root paths keep tests, the tunnel, and the hosted frontend working.
+# The /api copy serves the One Box frontend from the same origin.
+app.include_router(api)
+app.include_router(api, prefix="/api")
+
+
+def _frontend_dist() -> Path | None:
+    """Built frontend dir, or None when the box ships API-only."""
+    raw = config.FRONTEND_DIST or str(
+        Path(__file__).resolve().parent.parent.parent
+        / "frontend" / ".output" / "public")
+    dist = Path(raw)
+    return dist if (dist / "index.html").is_file() else None
+
+
+_FRONTEND_DIST = _frontend_dist()
+
+
+class _SpaMiddleware(BaseHTTPMiddleware):
+    """One Box: page addresses win for browsers, API wins for API calls.
+
+    Page and API paths overlap (/jobs, /library, /settings, /jobs/{id}),
+    so routing alone cannot split them. Browsers navigating send
+    Accept: text/html; API clients ($fetch, curl, tests) do not. For an
+    HTML-accepting GET outside /api/* and the docs, serve the matching
+    built file (/jobs/ → jobs/index.html), the app shell for dynamic job
+    pages, and otherwise fall through to the app (API or 404).
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if (_FRONTEND_DIST is not None and request.method == "GET"
+                and "text/html" in request.headers.get("accept", "")):
+            path = request.url.path
+            if not path.startswith(("/api/", "/api", "/docs", "/redoc", "/openapi.json")):
+                try:
+                    target = library.resolve_within(_FRONTEND_DIST, path.lstrip("/"))
+                except ValueError:
+                    target = None
+                if target is not None and target.is_file():
+                    return FileResponse(target)
+                if target is not None and target.is_dir():
+                    index = target / "index.html"
+                    if index.is_file():
+                        return FileResponse(index)
+                if path.startswith("/jobs/"):
+                    return FileResponse(_FRONTEND_DIST / "index.html")
+        return await call_next(request)
+
+
+app.add_middleware(_SpaMiddleware)
+
+
+@app.get("/{spa_path:path}", include_in_schema=False)
+async def serve_frontend(spa_path: str):
+    """One Box: serve the built site. Registered last, so every API
+    route wins. Unknown pages fall back to the app shell (client-side
+    routing); unknown /api/* paths stay honest JSON 404s."""
+    if _FRONTEND_DIST is None:
+        raise HTTPException(status_code=404, detail="Frontend not built. Run: cd frontend && npm run generate")
+    if spa_path.startswith("api/") or spa_path == "api":
+        raise HTTPException(status_code=404, detail=f"No such API path: /{spa_path}")
+    try:
+        target = library.resolve_within(_FRONTEND_DIST, spa_path)
+    except ValueError:
+        target = _FRONTEND_DIST / "index.html"
+    if spa_path and target.is_file():
+        return FileResponse(target)
+    fallback = _FRONTEND_DIST / "200.html"
+    return FileResponse(fallback if fallback.is_file() else _FRONTEND_DIST / "index.html")

@@ -19,12 +19,11 @@ function sampleLink(s: (typeof samples)[number]) {
       <div class="hero-grid">
         <div>
           <p class="kicker">Open-source BLAST workflows for occasional users</p>
-          <h1>Ask once. Get a verified gene answer.</h1>
+          <h1>BLAST without the learning curve.</h1>
           <p class="lede">
-            Paste an accession or sequence and ask in plain words. WhatsGene picks the BLAST program
-            with fixed rules, runs the search locally or on NCBI, and classifies every hit in code —
-            so you read a verdict with the exact E-value, identity and coverage behind it.
-            No parameters to learn first. No closed tab that loses your result.
+            Paste a sequence or accession and ask in plain words. WhatsGene picks the BLAST program,
+            runs the search on your own machine, and verifies every hit in code. You get a verdict
+            with the exact E-value, identity and coverage behind it — stored in your history, ready to defend.
           </p>
           <p class="cta-row">
             <NuxtLink to="/login?next=/new" class="btn">Log in to start a search →</NuxtLink>
@@ -61,55 +60,56 @@ function sampleLink(s: (typeof samples)[number]) {
     </section>
 
     <p class="section-label">Why WhatsGene</p>
-    <h2 style="margin-top: 0;">Built for the pain, not just the search</h2>
+    <h2 style="margin-top: 0;">No queues, no lost results, no twenty settings</h2>
     <dl class="feature-list">
-      <div><dt>Slow peak-time queues</dt><dd>Search your own local database in seconds. Switch to the real NCBI service per workflow when you need its full databases.</dd></div>
-      <div><dt>No history</dt><dd>Every workflow is stored with its parameters, hits, step log and verdict. Close the tab — nothing is lost.</dd></div>
-      <div><dt>Many windows, many searches</dt><dd>Queue several searches at once and keep working. Status and completion arrive on the same page.</dd></div>
-      <div><dt>No 1 TB download</dt><dd>Build small databases you actually need: from your own FASTA files, or from one species in the built-in copy.</dd></div>
-      <div><dt>Steep learning curve</dt><dd>One plain question replaces twenty BLAST settings. The rules engine chooses the program; Muse explains the setup and the result.</dd></div>
-      <div><dt>Messy files</dt><dd>Drop any files into the inbox. WhatsGene reads and sorts them, and sorted sequences become searches or databases with one click.</dd></div>
+      <div><dt>Local and fast</dt><dd>Search your own database in seconds. Use the real NCBI service per workflow when you need it.</dd></div>
+      <div><dt>Verified verdicts</dt><dd>Every hit is classified by fixed rules in code, and the top candidate must pass reciprocal, coverage and length checks.</dd></div>
+      <div><dt>History, kept</dt><dd>Every workflow stays stored with its parameters, hits and step log. Queue several at once; nothing is lost.</dd></div>
+      <div><dt>Open and extensible</dt><dd>Open source, local by default, with MCP tools so models can sort files, build databases and run searches.</dd></div>
     </dl>
 
     <p class="section-label">How a run goes</p>
-    <h2 style="margin-top: 0;">Three steps, no queue-watching</h2>
+    <h2 style="margin-top: 0;">Three steps</h2>
     <div class="tool-grid">
       <article class="step-card">
         <span class="step-num">1</span>
         <h3>You ask</h3>
-        <p>Accession or raw sequence, a target organism, your question — or a dropped file. Queue several searches and keep working; each one runs on its own.</p>
+        <p>Accession or sequence, plus your question in plain words.</p>
       </article>
       <article class="step-card">
         <span class="step-num">2</span>
         <h3>WhatsGene searches</h3>
-        <p>The rules engine picks the BLAST program and database: your fast local copy by default, the real NCBI service when the workflow needs it.</p>
+        <p>The rules engine picks the program and database, then runs the search in the background.</p>
       </article>
       <article class="step-card">
         <span class="step-num">3</span>
-        <h3>Code verifies, you read</h3>
-        <p>Hits are labelled strong, borderline or not significant by fixed thresholds. The top candidate must pass reciprocal, coverage and length checks.</p>
+        <h3>You read the verdict</h3>
+        <p>Confirmed or not confirmed, with exact numbers and a step log you can cite.</p>
       </article>
     </div>
 
-    <p class="section-label">Local, open, extensible</p>
-    <h2 style="margin-top: 0;">One researcher, one local tool</h2>
-    <dl class="feature-list">
-      <div><dt>Local by default</dt><dd>Databases and results live on your own machine. Remote services only ever see what you explicitly send them.</dd></div>
-      <div><dt>Reproducible</dt><dd>Program, database, E cutoff, word size and matrix are stored and shown on every result — the same fields NCBI reports.</dd></div>
-      <div><dt>Muse-guided</dt><dd>Paste a Muse key in Settings and Muse plans your database setup and explains workflow results in plain words.</dd></div>
-      <div><dt>Agent-ready</dt><dd>The library and search functions are MCP tools, so any MCP-capable model can inventory files, build databases and run searches.</dd></div>
-    </dl>
-
-    <div class="notice">
-      Short protein queries (30 aa or fewer) switch to the short-query profile automatically: E-value cutoff 200,000, word size 2, matrix PAM30. Every search stores the exact settings it ran with.
-    </div>
-
-    <h2>A result you can defend</h2>
-    <p style="max-width: 70ch; color: var(--muted); line-height: 1.65;">
-      Workflows move <strong style="color: var(--ink-2);">queued → running → done</strong> (or failed / cancelled)
-      and stay in your history with their verdict: confirmed or not confirmed, the top hit named, and
-      E-value, identity and coverage quoted exactly as computed. Ask follow-ups about any stored run —
-      answers quote stored values or say they cannot answer.
+    <p class="section-label">Run it yourself</p>
+    <h2 style="margin-top: 0;">Download WhatsGene</h2>
+    <p style="max-width: 70ch; color: var(--muted); line-height: 1.65; margin-top: 0;">
+      WhatsGene runs on your own Mac or Linux machine — your sequences never leave it.
+      Paste this one line in a terminal. It downloads the tool, starts it, and opens your browser.
+      Inside, press <strong style="color: var(--ink-2);">Run setup now</strong> (Settings → Local BLAST setup)
+      and the wizard downloads and builds the database for you.
     </p>
+    <pre class="install-line mono">curl -fsSL https://raw.githubusercontent.com/JUNXUN11/WhatsGene/main/install.sh | bash</pre>
+    <p class="hint">Needs Git, Python 3.12+, Node 20+ and NCBI BLAST+ (the installer checks and tells you what is missing). Prefer manual steps? The README walks through them.</p>
   </main>
 </template>
+
+<style scoped>
+.install-line {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 13.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 70ch;
+}
+</style>

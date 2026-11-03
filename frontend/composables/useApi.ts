@@ -76,6 +76,15 @@ export interface LibraryResponse {
   library: LibraryFile[]
 }
 
+export interface SetupRunState {
+  running: boolean
+  status: 'idle' | 'running' | 'done' | 'failed'
+  database: string
+  steps: SetupStep[]
+  log: string[]
+  setup: SettingsResponse['setup']
+}
+
 export interface LocalDatabase {
   name: string
   stem: string
@@ -144,6 +153,16 @@ export function useApi() {
     return res.text
   }
 
+  async function runSetup(database = 'swissprot'): Promise<SetupRunState> {
+    return await $fetch<SetupRunState>(`${base}/setup/run`, {
+      ...withCreds, method: 'POST', body: { database },
+    })
+  }
+
+  async function setupStatus(): Promise<SetupRunState> {
+    return await $fetch<SetupRunState>(`${base}/setup/status`, withCreds)
+  }
+
   async function listDatabases(): Promise<LocalDatabase[]> {
     const res = await $fetch<{ databases: LocalDatabase[] }>(`${base}/databases`, withCreds)
     return res.databases
@@ -193,5 +212,5 @@ export function useApi() {
     })
   }
 
-  return { createJob, getJob, listJobs, listDatabases, getLibrary, sortLibrary, buildDatabase, buildFromTaxon, libraryQueryText, cancelJob, deleteJob, askJob, alignJob, login, logout, me, getSettings, saveSettings, aiSetup, base }
+  return { createJob, getJob, listJobs, listDatabases, getLibrary, sortLibrary, buildDatabase, buildFromTaxon, libraryQueryText, runSetup, setupStatus, cancelJob, deleteJob, askJob, alignJob, login, logout, me, getSettings, saveSettings, aiSetup, base }
 }

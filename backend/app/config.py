@@ -44,6 +44,8 @@ NCBI_API_KEY: str = _env("NCBI_API_KEY")
 # (polite: 1 in-flight RID, polls >= 60s apart, aborts after 30 min).
 # fixture: recorded JSON from tests/fixtures (tests and demo).
 SEARCH_BACKEND: str = _env("SEARCH_BACKEND", "local")
+# BLASTDB names the database folder; empty means ~/blastdb everywhere
+# (resolve_blast_db_dir in search_backend is the single default).
 BLASTDB: str = _env("BLASTDB")
 FIXTURE_CASE: str = _env("FIXTURE_CASE", "")
 NCBI_POLL_INTERVAL_SECONDS: float = float(_env("NCBI_POLL_INTERVAL_SECONDS", "60") or "60")
@@ -51,6 +53,9 @@ NCBI_MAX_WAIT_SECONDS: int = int(_env("NCBI_MAX_WAIT_SECONDS", "1800") or "1800"
 LOCAL_BLAST_TIMEOUT_SECONDS: float = float(_env("LOCAL_BLAST_TIMEOUT_SECONDS", "600") or "600")
 
 # --- URLs / storage ---
+# FRONTEND_DIST: built frontend files the backend serves in One Box mode
+# (empty = repo default ../frontend/.output/public; unset dir = API only).
+FRONTEND_DIST: str = _env("FRONTEND_DIST", "")
 PUBLIC_BASE_URL: str = _env("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 FRONTEND_BASE_URL: str = _env("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
 DATABASE_PATH: Path = Path(_env("DATABASE_PATH", "./whatsgene.db"))
