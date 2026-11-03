@@ -181,6 +181,13 @@ NUXT_PUBLIC_API_BASE=http://<SERVER_ADDRESS>:8000
 FRONTEND_BASE_URL=http://<SERVER_ADDRESS>:3000
 ```
 
+## Hosted download page
+
+The public website is only a download page. Build it with
+`NUXT_PUBLIC_SITE_MODE=landing`: the front page shows the install line
+with no login button and makes no backend calls. The local tool always
+builds with `app` (`./start` sets this), so it opens straight on New search.
+
 ## What leaves your machine
 
 In local mode, your sequence and your results stay on your machine.

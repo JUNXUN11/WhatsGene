@@ -11,24 +11,45 @@ const samples = [
 function sampleLink(s: (typeof samples)[number]) {
   return `/new?sequence=${encodeURIComponent(s.sequence)}&question=${encodeURIComponent(s.question)}`
 }
+
+const siteMode = useRuntimeConfig().public.siteMode
+const installCmd = 'curl -fsSL https://raw.githubusercontent.com/JUNXUN11/WhatsGene/main/install.sh | bash'
+const copied = ref(false)
+
+async function copyInstall() {
+  try {
+    await navigator.clipboard.writeText(installCmd)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = installCmd
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
+  copied.value = true
+  window.setTimeout(() => { copied.value = false }, 2000)
+}
 </script>
 
 <template>
   <main class="page">
     <section class="hero">
+      <p class="kicker">Open-source BLAST workflows for occasional users</p>
+      <h1>Your own local BLAST</h1>
+      <div class="install-box" role="group" aria-label="Install command">
+        <code class="mono">{{ installCmd }}</code>
+        <button type="button" class="btn-copy" @click="copyInstall">{{ copied ? 'Copied ✓' : 'Copy' }}</button>
+      </div>
+      <p class="hint">Needs Git, Python 3.12+, Node 20+ and NCBI BLAST+. Inside the app: Settings → Local BLAST setup → Run setup now.</p>
       <div class="hero-grid">
         <div>
-          <p class="kicker">Open-source BLAST workflows for occasional users</p>
-          <h1>BLAST without the learning curve.</h1>
           <p class="lede">
             Paste a sequence or accession and ask in plain words. WhatsGene picks the BLAST program,
             runs the search on your own machine, and verifies every hit in code. You get a verdict
             with the exact E-value, identity and coverage behind it — stored in your history, ready to defend.
           </p>
-          <p class="cta-row">
-            <NuxtLink to="/login?next=/new" class="btn">Log in to start a search →</NuxtLink>
-          </p>
-          <div class="hero-samples">
+          <div v-if="siteMode !== 'landing'" class="hero-samples">
             <p>Try a sample search</p>
             <div class="sample-row" style="margin-top: 0;">
               <NuxtLink v-for="s in samples" :key="s.label" :to="sampleLink(s)" class="sample-chip">{{ s.label }}</NuxtLink>
@@ -88,28 +109,43 @@ function sampleLink(s: (typeof samples)[number]) {
       </article>
     </div>
 
-    <p class="section-label">Run it yourself</p>
-    <h2 style="margin-top: 0;">Download WhatsGene</h2>
-    <p style="max-width: 70ch; color: var(--muted); line-height: 1.65; margin-top: 0;">
-      WhatsGene runs on your own Mac or Linux machine — your sequences never leave it.
-      Paste this one line in a terminal. It downloads the tool, starts it, and opens your browser.
-      Inside, press <strong style="color: var(--ink-2);">Run setup now</strong> (Settings → Local BLAST setup)
-      and the wizard downloads and builds the database for you.
-    </p>
-    <pre class="install-line mono">curl -fsSL https://raw.githubusercontent.com/JUNXUN11/WhatsGene/main/install.sh | bash</pre>
-    <p class="hint">Needs Git, Python 3.12+, Node 20+ and NCBI BLAST+ (the installer checks and tells you what is missing). Prefer manual steps? The README walks through them.</p>
   </main>
 </template>
 
 <style scoped>
-.install-line {
+/* Full-width hero: title and command span the page, description and
+   example sit side by side below. */
+.hero h1 {
+  max-width: none;
+}
+.install-box {
+  display: flex;
+  align-items: stretch;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 14px 16px;
-  font-size: 13.5px;
-  white-space: pre-wrap;
+  margin: 18px 0 8px;
+  overflow: hidden;
+}
+.install-box code {
+  flex: 1;
+  align-self: center;
+  padding: 12px 14px;
+  font-size: 12.5px;
   overflow-wrap: anywhere;
-  max-width: 70ch;
+}
+.btn-copy {
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 0 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-copy:hover {
+  background: var(--accent-strong);
 }
 </style>

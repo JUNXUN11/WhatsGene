@@ -1,9 +1,10 @@
-// Guests-only (landing page). Logged-in visitors go straight to search —
-// after login there is no home page, only search and workflows.
+// The / route. In app builds (the local tool) it always goes straight to
+// search — /new's auth guard sends guests to login. In landing builds
+// (the hosted download page) it renders with no session check, since
+// there is no backend behind that site.
 export default defineNuxtRouteMiddleware(async () => {
   if (import.meta.server) return
-  const { ensure } = useAuth()
-  if (await ensure()) {
+  if (useRuntimeConfig().public.siteMode !== 'landing') {
     return navigateTo('/new')
   }
 })

@@ -40,7 +40,7 @@ if [ ! -f "$ROOT/frontend/.output/public/index.html" ]; then
     exit 1
   fi
   echo "Building the website (first run only, takes a few minutes) ..."
-  (cd "$ROOT/frontend" && npm install --no-audit --no-fund && npm run generate)
+  (cd "$ROOT/frontend" && npm install --no-audit --no-fund && NUXT_PUBLIC_SITE_MODE=app npm run generate)
 fi
 
 # 4. Search database (warn only; the app still opens without one) --------
