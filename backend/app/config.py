@@ -87,6 +87,10 @@ AUTH_PASSWORD: str = _env("AUTH_PASSWORD")
 AUTH_MODE: str = _env("AUTH_MODE", "multi").lower()
 if AUTH_MODE not in ("single", "multi"):
     AUTH_MODE = "multi"
+# Sign-up on the login page (decision 017). On by default for the local
+# tool; docker-compose turns it off, since a public server must not let
+# strangers in. Never creates the owner: that stays the first-run page.
+ALLOW_SIGNUP: bool = _env("ALLOW_SIGNUP", "true").lower() in ("1", "true", "yes")
 COOKIE_SECURE: bool = _env("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 # Session cookie SameSite policy. "lax" (default) is correct when page and
 # API share one site (single-domain compose). Split hosting — frontend on

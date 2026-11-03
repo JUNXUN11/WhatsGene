@@ -378,7 +378,7 @@ def delete_job(job_id: str) -> bool:
     return True
 
 
-# --- auth: users + sessions (single seeded user, no signup) ---
+# --- auth: users + sessions (owner-created accounts, no signup) ---
 
 def create_user(username: str, password_hash: str) -> dict[str, Any]:
     with _lock, _connect() as conn:
@@ -413,6 +413,37 @@ def user_count() -> int:
     with _connect() as conn:
         row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
     return int(row[0])
+
+
+def list_users() -> list[dict[str, Any]]:
+    """Every account, oldest (the owner) first. No password hashes."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, username, created_at FROM users ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_password_hash(user_id: int, password_hash: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+
+
+def delete_user_sessions(user_id: int) -> None:
+    """Log the user out everywhere (password change, reset, removal)."""
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+
+def delete_user(user_id: int, heir_id: int) -> int:
+    """Remove an account; its workflows move to heir_id so no result is lost."""
+    with _lock, _connect() as conn:
+        moved = conn.execute(
+            "UPDATE jobs SET user_id = ? WHERE user_id = ?", (heir_id, user_id)).rowcount
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM user_settings WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM usage WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    return moved
 
 
 def create_session(user_id: int, token: str, expires_at: str) -> None:

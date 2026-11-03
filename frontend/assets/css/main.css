@@ -43,6 +43,13 @@ a:hover { text-decoration-thickness: 2px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
 /* ---------- app shell ---------- */
+/* Fill the window so the footer sits at the bottom on short pages
+   instead of leaving an empty band of page background below it. */
+.site-shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.site-shell > .app-body, .site-shell > main { flex: 1 0 auto; }
+/* margin: 0 auto on a flex child shrinks it to its content; keep pages
+   at their max-width like a normal block. */
+.site-shell > main { width: 100%; }
 .site-header {
   position: sticky;
   top: 0;

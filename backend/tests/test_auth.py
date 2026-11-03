@@ -227,11 +227,210 @@ class TestSingleMode(Base):
             self.assertFalse(client.get("/auth/me").json()["authenticated"])
             self.assertEqual(client.get("/jobs").status_code, 401)
 
-    def test_seeds_owner_without_password(self):
+    def test_second_account_turns_login_on(self):
+        with self._client() as client:
+            self.assertTrue(client.get("/auth/me").json()["auto"])
+            res = client.post("/users", json={"username": "amina", "password": "amina-pass-1"})
+            self.assertEqual(res.status_code, 201)
+            # The owner got a session in that response, so stays signed in.
+            me = client.get("/auth/me").json()
+            self.assertTrue(me["authenticated"])
+            self.assertFalse(me["auto"])
+        with self._client() as fresh:
+            self.assertFalse(fresh.get("/auth/me").json()["authenticated"])
+            self.assertEqual(fresh.get("/jobs").status_code, 401)
+
+
+class TestFirstRun(Base):
+    """No account yet: the owner picks one on the first-run page (decision 017)."""
+
+    def setUp(self) -> None:
+        super().setUp()
         config.AUTH_PASSWORD = ""
-        user = auth.ensure_seeded_user()
-        self.assertIsNotNone(user)
-        self.assertEqual(db.first_user()["id"], user["id"])
+        config.AUTH_MODE = "single"
+
+    def _client(self, client_host: str = "127.0.0.1"):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        return TestClient(app, base_url="http://127.0.0.1:8000", client=(client_host, 50000))
+
+    def test_no_password_means_first_run_page(self):
+        with self._client() as client:
+            self.assertEqual(db.user_count(), 0)
+            me = client.get("/auth/me").json()
+            self.assertFalse(me["authenticated"])
+            self.assertTrue(me["needs_setup"])
+
+    def test_owner_creates_account_and_adopts_jobs(self):
+        orphan = db.create_job(question="q", raw_input="NP_000509")
+        with self._client() as client:
+            res = client.post("/auth/setup", json={"username": "junxun", "password": "long-enough"})
+            self.assertEqual(res.status_code, 201)
+            me = client.get("/auth/me").json()
+            self.assertTrue(me["authenticated"])
+            self.assertTrue(me["owner"])
+            self.assertEqual(me["username"], "junxun")
+            again = client.post("/auth/setup", json={"username": "other", "password": "long-enough"})
+            self.assertEqual(again.status_code, 403)
+        self.assertEqual(db.get_job(orphan["id"])["user_id"], db.first_user()["id"])
+
+    def test_network_browser_cannot_claim_owner(self):
+        with self._client(client_host="192.168.1.20") as client:
+            self.assertFalse(client.get("/auth/me").json()["needs_setup"])
+            res = client.post("/auth/setup", json={"username": "intruder", "password": "long-enough"})
+            self.assertEqual(res.status_code, 403)
+        self.assertEqual(db.user_count(), 0)
+
+    def test_empty_password_or_bad_username_is_refused(self):
+        with self._client() as client:
+            empty = client.post("/auth/setup", json={"username": "junxun", "password": ""})
+            self.assertEqual(empty.status_code, 400)
+            bad = client.post("/auth/setup", json={"username": "no spaces", "password": "long-enough"})
+            self.assertEqual(bad.status_code, 400)
+        self.assertEqual(db.user_count(), 0)
+
+    def test_short_password_is_allowed(self):
+        with self._client() as client:
+            res = client.post("/auth/setup", json={"username": "junxun", "password": "1"})
+            self.assertEqual(res.status_code, 201)
+
+
+class TestAccounts(Base):
+    """The owner adds, resets, and removes accounts; nobody else can."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.owner = auth.ensure_seeded_user()
+
+    def _login(self, username: str, password: str):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        client = TestClient(app)
+        res = client.post("/auth/login", json={"username": username, "password": password})
+        self.assertEqual(res.status_code, 200, res.text)
+        return client
+
+    def test_owner_manages_accounts(self):
+        owner = self._login("reviewer", "s3cret-review")
+        res = owner.post("/users", json={"username": "amina", "password": "amina-pass-1"})
+        self.assertEqual(res.status_code, 201)
+        dup = owner.post("/users", json={"username": "amina", "password": "amina-pass-1"})
+        self.assertEqual(dup.status_code, 400)
+        users = owner.get("/users").json()
+        self.assertEqual([u["username"] for u in users], ["reviewer", "amina"])
+        self.assertEqual([u["owner"] for u in users], [True, False])
+        self.assertNotIn("password_hash", users[1])
+        amina = self._login("amina", "amina-pass-1")
+        self.assertFalse(amina.get("/auth/me").json()["owner"])
+
+    def test_member_cannot_manage_accounts(self):
+        member = auth.create_account("amina", "amina-pass-1")
+        client = self._login("amina", "amina-pass-1")
+        self.assertEqual(client.get("/users").status_code, 403)
+        self.assertEqual(client.post("/users", json={"username": "x", "password": "long-enough"}).status_code, 403)
+        self.assertEqual(client.delete(f"/users/{self.owner['id']}").status_code, 403)
+        self.assertEqual(client.post(f"/users/{member['id']}/password",
+                                     json={"password": "long-enough"}).status_code, 403)
+
+    def test_reset_password_logs_member_out(self):
+        member = auth.create_account("amina", "amina-pass-1")
+        member_client = self._login("amina", "amina-pass-1")
+        owner = self._login("reviewer", "s3cret-review")
+        res = owner.post(f"/users/{member['id']}/password", json={"password": "fresh-pass-2"})
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(member_client.get("/auth/me").json()["authenticated"])
+        self._login("amina", "fresh-pass-2")
+        self.assertEqual(owner.post(f"/users/{self.owner['id']}/password",
+                                    json={"password": "fresh-pass-2"}).status_code, 400)
+
+    def test_remove_moves_workflows_to_owner(self):
+        member = auth.create_account("amina", "amina-pass-1")
+        job = db.create_job(question="q", raw_input="NP_000509", user_id=member["id"])
+        owner = self._login("reviewer", "s3cret-review")
+        res = owner.delete(f"/users/{member['id']}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["moved_workflows"], 1)
+        self.assertIsNone(db.get_user(member["id"]))
+        self.assertEqual(db.get_job(job["id"])["user_id"], self.owner["id"])
+        self.assertEqual(owner.delete(f"/users/{self.owner['id']}").status_code, 400)
+
+    def test_change_own_password(self):
+        client = self._login("reviewer", "s3cret-review")
+        wrong = client.post("/auth/password", json={"current_password": "nope", "new_password": "brand-new-pw"})
+        self.assertEqual(wrong.status_code, 400)
+        ok = client.post("/auth/password", json={"current_password": "s3cret-review",
+                                                 "new_password": "brand-new-pw"})
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(client.get("/auth/me").json()["authenticated"])  # new session cookie
+        self._login("reviewer", "brand-new-pw")
+
+    def test_auto_signed_owner_changes_password_without_current(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        config.AUTH_MODE = "single"
+        with TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as client:
+            res = client.post("/auth/password", json={"new_password": "brand-new-pw"})
+            self.assertEqual(res.status_code, 200)
+        self._login("reviewer", "brand-new-pw")
+
+
+
+class TestSignup(Base):
+    """Create an account from the login page (decision 017)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._old_signup = config.ALLOW_SIGNUP
+        config.ALLOW_SIGNUP = True
+
+    def tearDown(self) -> None:
+        config.ALLOW_SIGNUP = self._old_signup
+        super().tearDown()
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        return TestClient(app)
+
+    def test_signup_creates_member_and_signs_in(self):
+        owner = auth.ensure_seeded_user()
+        db.create_job(question="q", raw_input="NP_000509", user_id=owner["id"])
+        with self._client() as client:
+            self.assertTrue(client.get("/auth/me").json()["signup"])
+            res = client.post("/auth/register", json={"username": "amina", "password": "pw"})
+            self.assertEqual(res.status_code, 201)
+            me = client.get("/auth/me").json()
+            self.assertTrue(me["authenticated"])
+            self.assertFalse(me["owner"])
+            self.assertEqual(client.get("/jobs").json(), [])  # never sees the owner's work
+            self.assertEqual(client.get("/users").status_code, 403)
+            dup = client.post("/auth/register", json={"username": "amina", "password": "pw"})
+            self.assertEqual(dup.status_code, 400)
+
+    def test_signup_off(self):
+        auth.ensure_seeded_user()
+        config.ALLOW_SIGNUP = False
+        with self._client() as client:
+            self.assertFalse(client.get("/auth/me").json()["signup"])
+            res = client.post("/auth/register", json={"username": "amina", "password": "pw"})
+            self.assertEqual(res.status_code, 403)
+        self.assertEqual(db.user_count(), 1)
+
+    def test_signup_cannot_create_the_owner(self):
+        config.AUTH_PASSWORD = ""
+        with self._client() as client:
+            self.assertFalse(client.get("/auth/me").json()["signup"])
+            res = client.post("/auth/register", json={"username": "intruder", "password": "pw"})
+            self.assertEqual(res.status_code, 403)
+        self.assertEqual(db.user_count(), 0)
 
 
 if __name__ == "__main__":

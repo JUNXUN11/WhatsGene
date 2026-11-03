@@ -113,13 +113,14 @@ BLASTDB=/path/to/your/blastdb
 ```
 
 That is the only line `./start` needs.
-The first run writes `AUTH_MODE=single` in `backend/.env`, so the browser on your own machine opens the tool with no login page.
-The first run also generates a password, prints it once, and stores it as `AUTH_PASSWORD` in `backend/.env`.
-You need that password only if you share the tool with other people (see "Share the tool with other people" below).
+You create your account in the browser on the first run (Step 5), so `backend/.env` needs no password.
+The first run also writes `AUTH_MODE=single` in `backend/.env`.
+That setting keeps the browser on your own machine signed in while you are the only account.
 `SEARCH_BACKEND` already means local, and `DATABASE_PATH` already means `./whatsgene.db`.
-If you start the backend by hand instead of `./start`, you must set `AUTH_PASSWORD` yourself before the first start.
-The backend creates the login user once, at the first start, from that value.
-A later edit of the value does not change the created user.
+A server with no browser on the same machine cannot use the first-run page.
+On such a server, set `AUTH_USERNAME` and `AUTH_PASSWORD` in `backend/.env` before the first start.
+The backend then creates the owner account once, at the first start, from those values.
+A later edit of the values does not change the created account.
 To move your history to a new machine, copy the results file while the backend is stopped.
 To use a different search database, change `BLASTDB` to the new folder and restart the backend.
 
@@ -154,7 +155,9 @@ npm run dev   # http://localhost:3000
 ## Step 5: Run your first search
 
 Open `http://127.0.0.1:8000` in your browser (`./start` already opens it).
-The tool opens on New search with no login page.
+On the first run, the Welcome page asks for a username and a password.
+That account is the owner account of your copy of the tool.
+After that, the tool opens Settings on Local BLAST setup, and later runs open on New search with no login page.
 Open New search and paste the accession `P68871`.
 Write the question `Identify this protein` and press Run.
 The workflow reaches the done status in seconds on a local database.
@@ -165,22 +168,38 @@ For that case, paste the sequence text, or pick the real NCBI choice for that on
 
 If the page does not load, make sure that `./start` still runs.
 If a search reports a missing database, make sure that `BLASTDB` names the folder from Step 2.
-If you see a login page, open the tool at `http://127.0.0.1:8000` or `http://localhost:8000`, not at the address of your network card.
+If you see a login page and you are the only account, open the tool at `http://127.0.0.1:8000`, not at the address of your network card.
+If you forget your password while you are the only account, the browser on this machine still signs you in: set a new password in Settings → Accounts.
+If another person forgets a password, the owner resets it in Settings → Accounts.
 
 ## Share the tool with other people
 
-Each person who uses the tool on the same machine or server needs a login.
-To turn on the login page, set this line in `backend/.env` and restart the tool:
+Each person gets their own account and their own workflows.
+A person can create their own account on the login page with Create an account.
+The owner can also add accounts:
+
+1. Open Settings → Accounts.
+2. Under Add a person, type a username and a starting password, and press Add account.
+3. Tell the person the username and the password. They can change the password in Settings → Accounts.
+
+As soon as a second account exists, every browser asks for a login, the owner's browser too.
+Make sure that you know your own password before another person gets an account.
+To turn off Create an account, set `ALLOW_SIGNUP=false` in `backend/.env` and restart the tool. Then only the owner adds accounts.
+The owner can reset a password or remove an account from the same page.
+The workflows of a removed account move to the owner, so no result is lost.
+
+The tool listens only on this machine by default.
+For people on other computers on the same network, start the tool with this command:
 
 ```bash
-AUTH_MODE=multi
+./start --share
 ```
 
-Then every browser logs in with the user name `reviewer` and `AUTH_PASSWORD` from `backend/.env`.
-The Docker setup in `docs/HOSTING.md` always uses `AUTH_MODE=multi`.
-With `AUTH_MODE=single`, a request from another machine, or through a proxy or a tunnel, still gets the login page.
-Sign-up stays off in both modes.
-The decision record is `docs/decisions/016-auth-mode-single-or-multi.md`.
+The command prints the address that the other computers open, for example `http://192.168.1.20:8000`.
+The connection uses plain `http`, so use `--share` only on a network you trust.
+For a server with HTTPS, follow `docs/HOSTING.md`.
+The Docker setup always asks every browser for a login (`AUTH_MODE=multi`) and turns off Create an account (`ALLOW_SIGNUP=false`).
+The decision records are `docs/decisions/016-auth-mode-single-or-multi.md` and `docs/decisions/017-owner-created-accounts.md`.
 
 ## Run the backend on another machine
 
@@ -267,7 +286,7 @@ code validates, copies, builds, searches, and classifies.
 
 PSI-BLAST, PHI-BLAST, HMMER, Tajima tests, and bootstrap values are not in the tool.
 The MSA and tree rules come from the course decks, and the tool invents no rule for those steps.
-Separate accounts for each person are not in the tool yet: `AUTH_MODE=multi` gives one shared login.
+Accounts have two roles only: the owner, and everyone else. Password recovery by email is not in the tool.
 The decision record for the local tool direction is `docs/decisions/008-local-tool-own-server.md`.
 
 ## License

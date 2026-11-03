@@ -1,17 +1,21 @@
-"""Single-user auth for the reviewer demo (decision 007).
+"""Accounts and sessions (decisions 007, 016, 017).
 
-One seeded user, no signup route. Passwords are PBKDF2-SHA256 hashes
+No signup route. The owner (the oldest account) is created on the
+first-run page, or seeded from AUTH_PASSWORD on a server, and adds
+everyone else from Settings. Passwords are PBKDF2-SHA256 hashes
 (stdlib only); sessions are random tokens in SQLite, carried in an
 HttpOnly cookie. Ownership: every web job carries user_id and routes
 only serve jobs owned by the caller.
 
 AUTH_MODE=single (decision 016) skips the login page for the owner's
-own browser on this machine; everyone else still logs in.
+own browser on this machine while the owner is the only account;
+everyone else always logs in.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -26,6 +30,8 @@ _COOKIE_MAX_AGE = SESSION_TTL_DAYS * 24 * 3600
 
 _HASH_PREFIX = "pbkdf2-sha256"
 _HASH_ITERATIONS = 200_000
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 
 
 def hash_password(password: str) -> str:
@@ -62,20 +68,48 @@ def cookie_max_age() -> int:
 def ensure_seeded_user() -> dict[str, Any] | None:
     """Create the AUTH_USERNAME user once; adopt pre-auth jobs. Idempotent.
 
-    No-op when users exist or AUTH_PASSWORD is unset (e.g. offline tests).
-    AUTH_MODE=single seeds anyway, with a random password, so the owner
-    is never stuck on a login page nobody can pass.
+    No-op when users exist or AUTH_PASSWORD is unset: the owner then
+    creates the first account on the first-run page (create_owner).
     """
     if db.user_count() > 0:
         return None
     password = (config.AUTH_PASSWORD or "").strip()
-    if not password and config.AUTH_MODE == "single":
-        password = secrets.token_urlsafe(24)
     if not password:
         return None
     user = db.create_user(config.AUTH_USERNAME.strip() or "reviewer", hash_password(password))
     db.adopt_orphan_jobs(user["id"])
     return user
+
+
+def check_password(password: str) -> None:
+    """Raise ValueError when a new password is empty. No length or strength rule."""
+    if not password:
+        raise ValueError("Type a password.")
+
+
+def create_account(username: str, password: str) -> dict[str, Any]:
+    """A new account; ValueError with a plain message when it cannot be made."""
+    name = (username or "").strip()
+    if not USERNAME_RE.match(name):
+        raise ValueError("Use 1 to 32 letters, digits, dots, dashes, or underscores for the username.")
+    check_password(password)
+    if db.get_user_by_username(name):
+        raise ValueError(f"The username {name} is already taken.")
+    return db.create_user(name, hash_password(password))
+
+
+def create_owner(username: str, password: str) -> dict[str, Any]:
+    """The first account on a fresh install; it adopts pre-auth jobs."""
+    if db.user_count() > 0:
+        raise ValueError("This WhatsGene already has an owner account.")
+    user = create_account(username, password)
+    db.adopt_orphan_jobs(user["id"])
+    return user
+
+
+def is_owner(user: Mapping[str, Any]) -> bool:
+    owner = db.first_user()
+    return owner is not None and owner["id"] == user["id"]
 
 
 def resolve_session(token: str | None) -> dict[str, Any] | None:
@@ -132,7 +166,23 @@ def is_owner_browser(client_host: str | None, headers: Mapping[str, str]) -> boo
 
 def single_mode_owner(client_host: str | None,
                       headers: Mapping[str, str]) -> dict[str, Any] | None:
-    """The owner account under AUTH_MODE=single for the owner's browser, else None."""
+    """The owner under AUTH_MODE=single for the owner's browser, else None.
+
+    Only while the owner is the only account: once a second person has
+    an account, anyone at this machine could be that person, so every
+    browser logs in.
+    """
     if config.AUTH_MODE != "single" or not is_owner_browser(client_host, headers):
         return None
+    if db.user_count() != 1:
+        return None
     return db.first_user()
+
+
+def can_create_owner(client_host: str | None, headers: Mapping[str, str]) -> bool:
+    """The first-run page is open: no account yet, and this machine's browser.
+
+    The browser check stops anyone on the network from claiming the
+    owner account first on a server started with --share.
+    """
+    return db.user_count() == 0 and is_owner_browser(client_host, headers)
