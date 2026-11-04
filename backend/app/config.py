@@ -74,7 +74,14 @@ ASK_DAILY_LIMIT: int = int(_env("ASK_DAILY_LIMIT", "20") or "20")
 # Searches per user per day. 0 (default) means no cap: a local tool never
 # refuses its owner. Shared servers (docker-compose) set a cap.
 JOBS_DAILY_LIMIT: int = int(_env("JOBS_DAILY_LIMIT", "0") or "0")
-MODEL_MAX_TOKENS: int = int(_env("MODEL_MAX_TOKENS", "400") or "400")
+# Reasoning models (muse-spark-1.3) spend most of this on hidden
+# reasoning before the answer; 400 left them no room and every call came
+# back empty. It is a ceiling, so models that answer directly stop early.
+MODEL_MAX_TOKENS: int = int(_env("MODEL_MAX_TOKENS", "2000") or "2000")
+# Sent as reasoning_effort so open questions ("summarize for me") do not
+# spend the whole budget thinking. Blank it for an endpoint that rejects
+# the field.
+MODEL_REASONING_EFFORT: str = _env("MODEL_REASONING_EFFORT", "low").strip()
 MODEL_TIMEOUT_SECONDS: float = float(_env("MODEL_TIMEOUT_SECONDS", "60") or "60")
 
 # --- Auth: one seeded user, no signup (decision 007) ---

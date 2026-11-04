@@ -4,23 +4,30 @@ __pycache__/
 .venv/
 backend/.venv/
 *.db
+
+# Secrets: every .env file except the committed examples
 .env
-backend/.env
+.env.*
+!.env*.example
 
 # Node / Nuxt
 node_modules/
 frontend/node_modules/
 frontend/.nuxt/
 frontend/.output/
-frontend/.env
+frontend/dist
 
 # OS / editor
 .DS_Store
 .idea/
 .vscode/*
 !.vscode/extensions.json
-/docs/*
+
+# Local only: course material, working notes, BLAST databases
 /reference/
 /blastdb/
 CHANGELOG.md
 /AGENTS.md
+
+# Internal decision records (kept local)
+/docs/decisions/
