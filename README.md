@@ -32,6 +32,12 @@ WhatsGene was built waterfall-style: requirements, then rules, design, plan, bui
 - [Architecture](docs/ARCHITECTURE.md): the system as built
 - [Roadmap](docs/ROADMAP.md): planned vs delivered
 
+## Demo
+
+[![WhatsGene demo video](https://img.youtube.com/vi/ebVRLPiVxS8/maxresdefault.jpg)](https://youtu.be/ebVRLPiVxS8)
+
+▶ [Watch the 3-minute demo on YouTube](https://youtu.be/ebVRLPiVxS8)
+
 ## License
 
 MIT, see [LICENSE](LICENSE). WhatsGene is for research and education. It does not give medical advice.
