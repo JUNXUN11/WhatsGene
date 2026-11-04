@@ -139,9 +139,40 @@ class TestApi(Base):
         self.assertNotIn("muse_api_key", settings.get_settings(user["id"]))
         hint = settings.muse_key_hint(user["id"])
         self.assertTrue(hint["muse_key_set"])
-        self.assertEqual(hint["muse_key_last4"], "7890")
+        self.assertEqual(hint, {"muse_key_set": True})  # no tail, no prefix
         settings.save_settings(user["id"], {"clear_muse_key": True})
         self.assertEqual(settings.get_muse_key(user["id"]), "")
+
+    def test_api_never_echoes_any_part_of_the_key(self):
+        key = "sk-live-ABCDEFGH12345678"
+        with self._client() as client:
+            client.post("/auth/login", json={"username": "reviewer", "password": "s3cret-review"})
+            saved = client.put("/settings", json={"muse_api_key": key})
+            fetched = client.get("/settings")
+        for res in (saved, fetched):
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["muse_key_set"])
+            for piece in (key, key[-4:], key[:8], "5678"):
+                self.assertNotIn(piece, res.text)
+
+    def test_reveal_returns_only_your_own_key(self):
+        from fastapi.testclient import TestClient
+
+        from app import auth
+        from app.main import app
+
+        key = "sk-live-ABCDEFGH12345678"
+        with self._client() as owner:
+            self.assertEqual(owner.get("/settings/muse-key").status_code, 401)
+            owner.post("/auth/login", json={"username": "reviewer", "password": "s3cret-review"})
+            owner.put("/settings", json={"muse_api_key": key})
+            shown = owner.get("/settings/muse-key")
+            self.assertEqual(shown.json(), {"muse_api_key": key})
+            self.assertEqual(shown.headers.get("cache-control"), "no-store")
+        db.create_user("other", auth.hash_password("other-pass"))
+        with TestClient(app) as other:
+            other.post("/auth/login", json={"username": "other", "password": "other-pass"})
+            self.assertEqual(other.get("/settings/muse-key").json(), {"muse_api_key": ""})
 
     def test_ai_setup_demo_without_key(self):
         with self._client() as client:

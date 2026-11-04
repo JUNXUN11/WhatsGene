@@ -26,7 +26,7 @@ def completions_url(base_url: str | None = None) -> str:
 
 def chat_completion(*, system: str, user: str, max_tokens: int,
                     api_key: str | None = None, base_url: str | None = None,
-                    model: str | None = None) -> dict[str, Any]:
+                    model: str | None = None, timeout: float | None = None) -> dict[str, Any]:
     """Return {"text": str, "usage": dict | None}. Raises ModelError.
 
     Per-user credentials (Settings) override the server env when given.
@@ -37,7 +37,7 @@ def chat_completion(*, system: str, user: str, max_tokens: int,
     if not key:
         raise ModelError("MUSE_API_KEY is not set.")
     try:
-        with httpx.Client(timeout=config.MODEL_TIMEOUT_SECONDS) as client:
+        with httpx.Client(timeout=timeout or config.MODEL_TIMEOUT_SECONDS) as client:
             response = client.post(
                 completions_url(base_url),
                 headers={"Authorization": f"Bearer {key}"},

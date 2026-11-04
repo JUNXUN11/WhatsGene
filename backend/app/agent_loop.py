@@ -146,7 +146,12 @@ def process_job(job: dict, backend: SearchBackend,
          decision="accept input", reason="Alphabet and length checks passed (blast-rules §2).")
 
     # --- intent -> workflow plan (rules engine; model supplies intent only) ---
-    intent = agent.get_intent(question)
+    intent = agent.get_intent(question, user_id=job.get("user_id"), job_id=job_id)
+    if intent.get("source") == "muse":
+        _log(job_id, step="intent", observation=f"Question: {question.strip()[:120]}",
+             decision=f"goal={intent.get('goal')}, target={intent.get('target_organism')}",
+             reason="Muse Spark read the question into the intent contract; fields validated "
+                    "in code. The rules engine still chooses program and database.")
     mode = (job.get("workflow_mode") or "auto").lower()
     try:
         plan = rules_engine.plan_programs(
@@ -323,15 +328,25 @@ def process_job(job: dict, backend: SearchBackend,
             recip_id = db.create_search(job_id, kind="reciprocal", program=spec["program"],
                                         database=recorded_db(spec["database"]), parameters=recip_params, rid=recip_rid)
             db.update_job(job_id, searches_used=searches_used)
-            if backend.poll(recip_rid) != "ready":
-                db.complete_search(recip_id, hits=[], status="failed",
-                                   error="Reciprocal search did not complete.")
+            # A slow NCBI queue aborts the poll with SearchError (30 min cap);
+            # that fails this candidate, not the workflow, so the primary
+            # hits still reach the results page.
+            try:
+                recip_status = backend.poll(recip_rid)
+                raw_recip = backend.fetch_results(recip_rid) if recip_status == "ready" else None
+            except SearchError as exc:
+                recip_status, raw_recip = "failed", None
+                recip_error = str(exc)
+            else:
+                recip_error = "Reciprocal search did not complete."
+            if raw_recip is None:
+                db.complete_search(recip_id, hits=[], status="failed", error=recip_error)
                 _log(job_id, step="reciprocal",
-                     observation=f"Candidate {candidate.get('accession', '?')} RID {recip_rid}",
+                     observation=f"Candidate {candidate.get('accession', '?')} RID {recip_rid} status={recip_status}",
                      decision="try next candidate",
-                     reason="Reciprocal search did not complete; verification cannot confirm this candidate.")
+                     reason=f"{recip_error} Verification cannot confirm this candidate.")
                 continue
-            reciprocal_hits = classify_hits(_with_coverage(backend.fetch_results(recip_rid), len(sequence)), job.get("cutoffs") or None)
+            reciprocal_hits = classify_hits(_with_coverage(raw_recip, len(sequence)), job.get("cutoffs") or None)
             db.complete_search(recip_id, hits=reciprocal_hits, status="done")
             result = verify_candidate(
                 candidate=candidate, reciprocal_hits=reciprocal_hits,
@@ -413,9 +428,16 @@ def process_job(job: dict, backend: SearchBackend,
     summary = agent.summarise(job=db.get_job(job_id) or job, hits=primary_hits,
                               outcome=outcome, verification=verification,
                               workflow_searches=workflow_searches)
+    muse_text = agent.muse_summary(job=db.get_job(job_id) or job, template=summary,
+                                   searches=db.get_searches(job_id))
     final = db.update_job(job_id, status="done", outcome=outcome, hits=primary_hits,
-                          summary=summary, searches_used=searches_used)
-    _log(job_id, step="summarise", observation=f"outcome={outcome}",
-         decision="report to user", reason="Summary generated from parsed facts only.")
+                          summary=muse_text or summary, searches_used=searches_used)
+    if muse_text:
+        _log(job_id, step="summarise", observation=f"outcome={outcome}", decision="report to user",
+             reason="Muse Spark wrote the summary from stored facts; every number in it was "
+                    f"checked against the stored results. Code facts: {summary}")
+    else:
+        _log(job_id, step="summarise", observation=f"outcome={outcome}",
+             decision="report to user", reason="Summary generated from parsed facts only.")
     notify(f"Job {job_id} done ({outcome}). {summary}")
     return final or job

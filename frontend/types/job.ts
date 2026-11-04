@@ -42,6 +42,7 @@ export interface Job {
   id: string
   status: JobStatus
   question: string
+  raw_input?: string
   input_kind: string
   source?: string
   workflow_mode?: string

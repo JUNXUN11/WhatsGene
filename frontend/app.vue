@@ -84,9 +84,7 @@ async function signOut() {
 }
 
 function shortQuestion(job: Job): string {
-  if (job.question) return job.question
-  const parts = [job.program, job.database].filter(Boolean)
-  return parts.length ? parts.join(' · ') : 'Untitled workflow'
+  return workflowTitle(job)
 }
 </script>
 
@@ -162,7 +160,7 @@ function shortQuestion(job: Job): string {
                 <span class="side-recent-text">
                   <span class="side-recent-q">{{ shortQuestion(job) }}</span>
                   <span class="side-recent-meta">
-                    <span class="side-recent-id mono">{{ job.id }}</span>
+                    <span class="side-recent-id mono">{{ job.question ? workflowInput(job) : workflowWhen(job) }}</span>
                     <span class="side-recent-status">{{ job.status }}</span>
                   </span>
                 </span>

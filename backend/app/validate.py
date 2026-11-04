@@ -17,6 +17,10 @@ _UNIPROT_RE = re.compile(
     r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})(\.\d+)?$")
 
 
+_HEADERLESS_FIRST_RE = re.compile(r"[0-9=|:;,()\[\]]")
+_SEQUENCE_LINE_RE = re.compile(r"[A-Za-z*\-]+")
+
+
 class ValidationError(ValueError):
     """Raised with a user-facing, specific message."""
 
@@ -63,6 +67,12 @@ def normalise_sequence(raw: str) -> tuple[str, str | None]:
         if line.startswith(";"):
             continue
         lines.append(line)
+    # A FASTA copied without its ">" (common from UniProt pages): the first
+    # line has digits or punctuation such as "OS=", and every later line is
+    # pure sequence letters. Read that first line as the header.
+    if header is None and len(lines) >= 2 and _HEADERLESS_FIRST_RE.search(lines[0]) \
+            and _SEQUENCE_LINE_RE.fullmatch("".join(lines[1:]).replace(" ", "")):
+        header, lines = lines[0], lines[1:]
     sequence = "".join(lines).upper().replace(" ", "").replace("\r", "")
     if header is not None and not sequence:
         raise ValidationError("FASTA header found but no sequence. Paste the sequence lines after the '>' header.")

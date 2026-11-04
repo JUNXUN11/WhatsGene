@@ -82,6 +82,11 @@ def run_job(job: dict, backend=None) -> dict:
                 final = _run_loop(job, backend)
         else:
             final = _run_loop(job, backend)
+    except Exception as exc:  # pool threads swallow errors: never leave "running"
+        reason = f"Workflow stopped by an unexpected error: {exc}"
+        db.add_step(job["id"], step="worker", observation=type(exc).__name__,
+                    decision="fail job", reason=reason)
+        final = db.update_job(job["id"], status="failed", error=reason, summary=reason) or job
     finally:
         with _inflight_lock:
             _inflight.discard(job["id"])
