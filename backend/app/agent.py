@@ -157,7 +157,7 @@ def get_intent(question: str, *, user_id: int | None = None, job_id: str | None 
     if not creds or not (question or "").strip():
         return {**rules, "source": "rules"}
     text = _live_call(kind="intent", system=INTENT_SYSTEM, prompt=f"QUESTION: {question.strip()[:ASK_QUESTION_CHARS]}",
-                      creds=creds, user_id=user_id, job_id=job_id, max_tokens=200,
+                      creds=creds, user_id=user_id, job_id=job_id, max_tokens=config.MODEL_MAX_TOKENS,
                       timeout=WORKFLOW_TIMEOUT_SECONDS)
     muse = _parse_intent_json(text or "")
     if muse is None:
@@ -253,8 +253,16 @@ def summarise(*, job: dict, hits: list[dict], outcome: str | None,
 
 def _stored_facts(*, job: dict, searches: list[dict], deterministic: str) -> str:
     """Compact stored numbers the model may quote. Truncated, never invented."""
-    lines = [f"stored answer: {deterministic}"]
+    lines = []
+    # The code's "I can't answer that" fallback is not a fact; passed on,
+    # Muse just repeats it for open questions like "summarize for me".
+    if not deterministic.startswith("I can't answer that"):
+        lines.append(f"stored answer: {deterministic}")
+    lines.append(f"query: {job.get('raw_input') or '?'} ({job.get('detected_type') or '?'}, "
+                 f"{job.get('query_length') or '?'} residues)")
     lines.append(f"outcome: {job.get('outcome') or job.get('status')}")
+    if job.get("summary") and job["summary"] != deterministic:
+        lines.append(f"verdict: {job['summary']}")
     for search in searches:
         if search.get("kind") not in ("primary", "retry"):
             continue
@@ -265,7 +273,8 @@ def _stored_facts(*, job: dict, searches: list[dict], deterministic: str) -> str
             f"matrix {params.get('matrix')}")
         for hit in (search.get("hits") or [])[:3]:
             lines.append(
-                f"hit {hit.get('accession')} ({hit.get('organism')}): "
+                f"hit {hit.get('accession')} ({hit.get('organism')}; "
+                f"{(hit.get('annotation') or '?').split(' OS=')[0]}): "
                 f"E {hit.get('evalue')}, id {hit.get('identity')}%, "
                 f"cov {hit.get('query_coverage')}%, {hit.get('classification')}")
     return "\n".join(lines)[:ASK_FACTS_CHARS]

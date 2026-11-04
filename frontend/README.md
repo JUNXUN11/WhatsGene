@@ -1,17 +1,15 @@
 # WhatsGene — Frontend (Nuxt)
 
-Nuxt (Vue 3, TypeScript). Landing page, workflow submission, parallel job manager with live status, rich results, and Ask box. WhatsApp is deferred; see decision 004.
-Talks to the FastAPI backend — see `../docs/ARCHITECTURE.md`.
+Nuxt 3 (Vue 3, TypeScript), built as a static SPA. Pages: welcome, login, new search, workflows, results with Ask, library, settings. Design: [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
 
-## Run
+The standard run is `./start` from the repo root: it builds this app once (`npm run generate`), and the backend serves it on `http://127.0.0.1:8000`.
+
+For frontend development with hot reload:
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev    # http://localhost:3000, proxies /api to the backend on :8000
 ```
 
-- App: http://localhost:3000
-- Backend expected at http://localhost:8000 (override with `NUXT_PUBLIC_API_BASE`)
-
-Start the backend first (see `../backend/README.md`).
+Build modes (`NUXT_PUBLIC_SITE_MODE`): `app` (default) is the tool; `landing` is the download page only, with no backend calls.

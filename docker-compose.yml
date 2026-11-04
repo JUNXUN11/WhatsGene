@@ -4,7 +4,7 @@
 # Copy .env.production.example to .env, fill it in, then:
 #   docker compose up -d --build
 # The BLAST database is NOT baked into any image: put it in ./blastdb/
-# next to this file (see docs/HOSTING.md §4).
+# next to this file (see docs/HOSTING.md §2).
 services:
   caddy:
     image: caddy:2-alpine
