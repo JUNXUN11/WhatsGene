@@ -145,7 +145,8 @@ def get_muse_key(user_id: int) -> str:
 
 def muse_key_hint(user_id: int) -> dict[str, Any]:
     key = get_muse_key(user_id)
-    return {"muse_key_set": bool(key), "muse_key_last4": key[-4:] if len(key) >= 4 else ""}
+    # Only whether a key exists: no part of it ever leaves the server.
+    return {"muse_key_set": bool(key)}
 
 
 def save_settings(user_id: int, payload: dict[str, Any]) -> dict[str, Any]:

@@ -12,6 +12,7 @@ const job = ref<Job | null>(null)
 const error = ref('')
 const askText = ref('')
 const answer = ref('')
+const answerSource = ref<'muse' | 'stored' | ''>('')
 const asking = ref(false)
 const aligning = ref(false)
 const alignError = ref('')
@@ -124,11 +125,14 @@ async function ask() {
   if (!job.value || !askText.value.trim()) return
   asking.value = true
   answer.value = ''
+  answerSource.value = ''
   try {
-    answer.value = await askJob(job.value.id, askText.value.trim())
+    const res = await askJob(job.value.id, askText.value.trim())
+    answer.value = res.answer
+    answerSource.value = res.source
   } catch (e: unknown) {
-    const err = e as { message?: string }
-    answer.value = err.message || 'Could not ask right now.'
+    const err = e as { data?: { detail?: string }; message?: string }
+    answer.value = err.data?.detail || err.message || 'Could not ask right now.'
   } finally {
     asking.value = false
   }
@@ -178,13 +182,14 @@ const suggestions = [
 
 <template>
   <main class="page">
-    <nav class="crumbs" aria-label="Breadcrumb"><NuxtLink to="/jobs">Workflows</NuxtLink><span class="sep">/</span><span class="mono">{{ route.params.id }}</span></nav>
+    <nav class="crumbs" aria-label="Breadcrumb"><NuxtLink to="/jobs">Workflows</NuxtLink><span class="sep">/</span><span>{{ job ? workflowTitle(job) : route.params.id }}</span></nav>
 
     <p v-if="error" class="error">{{ error }}</p>
     <p v-else-if="!job">Loading workflow…</p>
 
     <template v-else>
-      <h1 class="detail-title">{{ job.question || `Workflow ${job.id}` }}</h1>
+      <h1 class="detail-title">{{ workflowTitle(job) }}</h1>
+      <p v-if="job.question" class="detail-input mono" :title="job.raw_input">{{ workflowInput(job) }}</p>
       <p class="job-headline">
         <span class="status-pill" :class="`status-${job.status}`">{{ job.status }}</span>
         <span class="headline-meta">
@@ -247,7 +252,9 @@ const suggestions = [
           <button class="btn" type="submit" :disabled="asking">{{ asking ? 'Asking…' : 'Ask →' }}</button>
         </form>
       </div>
-      <div v-if="answer" class="answer-card">{{ answer }}</div>
+      <div v-if="answer" class="answer-card">
+        <p v-if="answerSource" class="answer-source">{{ answerSource === 'muse' ? 'Muse Spark — every number checked against the stored results' : 'From the stored results (add a Muse key in Settings for a written answer)' }}</p><div>{{ answer }}</div>
+      </div>
 
       <template v-if="job.searches && job.searches.length">
         <h2>Searches in this workflow</h2>

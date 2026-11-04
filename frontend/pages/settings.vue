@@ -3,7 +3,7 @@ import type { AiSetupResponse, SettingsResponse, SetupRunState, UserSettings } f
 
 definePageMeta({ middleware: 'auth' })
 
-const { getSettings, saveSettings, aiSetup, runSetup, setupStatus } = useApi()
+const { getSettings, saveSettings, revealMuseKey, aiSetup, runSetup, setupStatus } = useApi()
 const { push: pushToast } = useToasts()
 
 const form = ref<UserSettings>({
@@ -21,8 +21,11 @@ const standardCutoffs = ref<UserSettings['cutoffs'] | null>(null)
 const databaseOptions = ref<SettingsResponse['database_options']>({})
 const setup = ref<SettingsResponse['setup'] | null>(null)
 const keySet = ref(false)
-const keyLast4 = ref('')
 const apiKeyInput = ref('')
+// Eye button: shows typed text, or fetches the saved key on demand.
+const showKey = ref(false)
+const revealedKey = ref('')
+const confirmRemoveKey = ref(false)
 const busy = ref(false)
 const loading = ref(true)
 const error = ref('')
@@ -72,7 +75,6 @@ async function load() {
     databaseOptions.value = res.database_options
     setup.value = res.setup
     keySet.value = res.muse_key_set
-    keyLast4.value = res.muse_key_last4
   } catch {
     error.value = 'Could not load your settings. Is the backend running on port 8000?'
   } finally {
@@ -94,6 +96,7 @@ async function save() {
     if (apiKeyInput.value.trim()) payload.muse_api_key = apiKeyInput.value.trim()
     form.value = await saveSettings(payload)
     apiKeyInput.value = ''
+    hideKey()
     await load()
     pushToast({ kind: 'info', title: 'Settings saved', body: 'New searches will use them.' })
   } catch (e: unknown) {
@@ -104,11 +107,39 @@ async function save() {
   }
 }
 
+function hideKey() {
+  showKey.value = false
+  // A revealed saved key goes back to ****; typed text stays (masked).
+  if (revealedKey.value && apiKeyInput.value === revealedKey.value) apiKeyInput.value = ''
+  revealedKey.value = ''
+}
+
+async function toggleKey() {
+  if (showKey.value) return hideKey()
+  if (keySet.value && !apiKeyInput.value) {
+    try {
+      revealedKey.value = await revealMuseKey()
+      apiKeyInput.value = revealedKey.value
+    } catch {
+      error.value = 'Could not show the saved key.'
+      return
+    }
+  }
+  showKey.value = true
+}
+
+function deleteKey() {
+  if (keySet.value) confirmRemoveKey.value = true
+  else apiKeyInput.value = ''
+}
+
 async function removeKey() {
   busy.value = true
   try {
     await saveSettings({ ...form.value, cutoffs: { ...form.value.cutoffs }, clear_muse_key: true })
     apiKeyInput.value = ''
+    hideKey()
+    confirmRemoveKey.value = false
     await load()
     pushToast({ kind: 'info', title: 'Muse key removed', body: 'AI features now use demo replies.' })
   } catch (e: unknown) {
@@ -199,15 +230,31 @@ function useStandard() {
       <fieldset>
         <legend>Muse AI (Meta model)</legend>
         <p class="hint muse-status">
-          <span v-if="keySet">Your key is saved (ends {{ keyLast4 }}). Muse powers the Local BLAST setup assistant and Ask on every workflow page.</span>
+          <span v-if="keySet">A key is saved. It stays hidden unless you press the eye button. Muse now reads your questions, writes each verdict, and answers Ask on every workflow.</span>
           <span v-else>No key saved yet. Without one, AI features answer with a scripted demo so you can see how they will work.</span>
         </p>
         <label for="muse-key">Muse API key</label>
-        <input id="muse-key" v-model="apiKeyInput" type="password" autocomplete="off" :placeholder="keySet ? 'Saved — type a new key only to replace it' : 'Paste your Muse Spark Open key'">
+        <!-- Masked, and kept out of browser password managers: an API key is not a site password. -->
+        <div class="key-field">
+          <input id="muse-key" v-model="apiKeyInput" :type="showKey ? 'text' : 'password'" name="muse-api-key"
+                 autocomplete="off" autocapitalize="off" spellcheck="false"
+                 data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
+                 :placeholder="keySet ? '****************' : 'Paste your Muse API key'">
+          <div class="key-actions">
+            <button type="button" class="key-btn" :aria-label="showKey ? 'Hide key' : 'Show key'" :title="showKey ? 'Hide key' : 'Show key'"
+                    :disabled="!keySet && !apiKeyInput" @click="toggleKey">
+              <svg v-if="!showKey" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18" /><path d="M10.6 5.1A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a10 10 0 0 0 5.4-1.6" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></svg>
+            </button>
+            <button type="button" class="key-btn key-btn-danger" :aria-label="keySet ? 'Delete saved key' : 'Clear'" :title="keySet ? 'Delete saved key' : 'Clear'"
+                    :disabled="busy || (!keySet && !apiKeyInput)" @click="deleteKey">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
+            </button>
+          </div>
+        </div>
         <label for="muse-url">Endpoint (optional)</label>
         <input id="muse-url" v-model="form.muse_base_url" type="text" placeholder="Leave blank to use this install's endpoint">
-        <p class="hint">The key is stored only in this machine's local database and is never shown again. Muse explains and guides; WhatsGene code still runs every search, build, and check. Built with Muse Spark Open.</p>
-        <button v-if="keySet" class="btn btn-secondary btn-small" type="button" :disabled="busy" @click="removeKey">Remove saved key</button>
+        <p class="hint">The key is stored only in this machine's local database, and only your own account can show it. Muse explains and guides; WhatsGene code still runs every search, build, and check. Works with Muse Spark (Meta Model API) or Muse Spark Open.</p>
       </fieldset>
       </div>
 
@@ -346,6 +393,18 @@ function useStandard() {
       </div>
       <p v-if="error" class="error">{{ error }}</p>
     </form>
+    <ConfirmDialog
+      :open="confirmRemoveKey"
+      title="Delete the saved Muse key?"
+      confirm-label="Delete key"
+      danger
+      :busy="busy"
+      busy-label="Deleting…"
+      @confirm="removeKey"
+      @cancel="confirmRemoveKey = false"
+    >
+      <p>Searches keep working with code-written summaries and answers. You can paste a key again at any time.</p>
+    </ConfirmDialog>
   </main>
 </template>
 
@@ -369,6 +428,16 @@ function useStandard() {
 .setup-log { margin: 10px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
 .submit-row { display: flex; gap: 12px; margin-top: 20px; align-items: center; flex-wrap: wrap; }
 .muse-status { margin-top: 10px; }
+.key-field { position: relative; }
+.key-field input { padding-right: 84px; }
+.key-actions { position: absolute; top: 0; right: 6px; bottom: 0; display: flex; align-items: center; gap: 2px; }
+.key-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer;
+}
+.key-btn:hover:not(:disabled) { background: var(--panel); color: var(--ink); }
+.key-btn-danger:hover:not(:disabled) { color: var(--error); }
+.key-btn:disabled { opacity: 0.35; cursor: default; }
 .assistant-result { margin-top: 14px; }
 .assistant-mode { font-size: 13px; font-weight: 650; color: var(--ink-2); margin: 0 0 8px; }
 .step-list { margin: 0 0 10px; padding-left: 18px; display: grid; gap: 8px; font-size: 13.5px; line-height: 1.5; }

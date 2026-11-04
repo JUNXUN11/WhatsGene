@@ -321,6 +321,17 @@ def get_settings(user: dict = Depends(current_user)) -> dict:
     return user_settings.public_settings(user["id"])
 
 
+@api.get("/settings/muse-key")
+def reveal_muse_key(response: Response, user: dict = Depends(current_user)) -> dict:
+    """The caller's own saved Muse key, for the eye button in Settings only.
+
+    Never part of GET /settings; no other account can read it, and the
+    browser is told not to cache it.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    return {"muse_api_key": user_settings.get_muse_key(user["id"])}
+
+
 @api.put("/settings")
 def put_settings(body: SettingsBody, user: dict = Depends(current_user)) -> dict:
     try:
@@ -601,17 +612,18 @@ def ask_job(job_id: str, body: AskBody, user: dict = Depends(current_user)) -> d
     job = _owned_job(job_id, user)
     try:
         profile = user_settings.get_settings(user["id"])
-        answer = agent.answer_followup(job=job, question=body.question,
-                                       searches=db.get_searches(job_id),
-                                       user_id=user["id"],
-                                       muse_api_key=user_settings.get_muse_key(user["id"]),
-                                       muse_base_url=profile.get("muse_base_url") or None,
-                                       muse_model=profile.get("muse_model") or None)
+        result = agent.answer_followup_detailed(
+            job=job, question=body.question, searches=db.get_searches(job_id),
+            user_id=user["id"], muse_api_key=user_settings.get_muse_key(user["id"]),
+            muse_base_url=profile.get("muse_base_url") or None,
+            muse_model=profile.get("muse_model") or None)
     except agent.QuotaError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
-    if answer == "__FORGET_HISTORY__":
-        return {"job_id": job_id, "answer": "Ask on WhatsApp to delete chat history, or use a job you own there."}
-    return {"job_id": job_id, "answer": answer}
+    if result["answer"] == "__FORGET_HISTORY__":
+        return {"job_id": job_id, "source": "stored",
+                "answer": "Ask on WhatsApp to delete chat history, or use a job you own there."}
+    # source: "muse" (live, numbers checked) or "stored" (code-written answer).
+    return {"job_id": job_id, "answer": result["answer"], "source": result["source"]}
 
 
 def _public_job(job: dict, user_id: int | None = None) -> dict:

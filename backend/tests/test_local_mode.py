@@ -71,6 +71,26 @@ class TestAccessionFormats(unittest.TestCase):
         self.assertEqual(parse_accession_query("p0dtc2"), ("P0DTC2", None))
 
 
+class TestHeaderlessFasta(unittest.TestCase):
+    def test_fasta_pasted_without_its_marker(self):
+        from app.validate import detect_type, normalise_sequence
+
+        raw = ("P01308 Insulin OS=Homo sapiens OX=9606 GN=INS PE=1 SV=1\n"
+               "MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPL\n"
+               "ALEGSLQKRGIVEQCCTSICSLYQLENYCN")
+        seq, header = normalise_sequence(raw)
+        self.assertEqual(header, "P01308 Insulin OS=Homo sapiens OX=9606 GN=INS PE=1 SV=1")
+        self.assertEqual(len(seq), 110)
+        self.assertEqual(detect_type(seq), "protein")
+
+    def test_plain_multiline_sequence_is_not_a_header(self):
+        from app.validate import normalise_sequence
+
+        seq, header = normalise_sequence("MVHLTPEEKSAVTALWGK\nVNVDEVGGEALGRLLVVY")
+        self.assertIsNone(header)
+        self.assertEqual(seq, "MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVY")
+
+
 class TestRecordedDatabase(Base):
     def test_local_records_the_database_actually_searched(self):
         self.assertEqual(local_database_name("refseq_protein"), "swissprot")
@@ -164,6 +184,41 @@ class TestLocalMafft(Base):
         config.NCBI_EMAIL = "lab@example.org"
         with mock.patch("shutil.which", return_value=None):
             self.assertEqual(msa.get_msa_backend().name, "ebi-mafft")
+
+
+
+class _TimeoutReciprocal(Fixture):
+    """The primary search works; every reciprocal poll hits the NCBI wait cap."""
+
+    def __init__(self) -> None:
+        super().__init__(primary_hits=_hits())
+        self._polls = 0
+
+    def poll(self, token: str) -> str:
+        self._polls += 1
+        if self._polls > 1:
+            raise SearchError(f"NCBI search {token} did not finish within 30 minutes and was aborted.")
+        return super().poll(token)
+
+
+class TestNoStuckWorkflows(Base):
+    def test_reciprocal_timeout_finishes_with_primary_hits(self):
+        final = self._run(QUERY, backend=_TimeoutReciprocal())
+        self.assertEqual(final["status"], "done")
+        self.assertNotEqual(final["outcome"], "confirmed")
+        self.assertTrue(final["hits"])
+        recip = [s for s in db.get_searches(final["id"]) if s["kind"] == "reciprocal"]
+        self.assertTrue(recip and recip[0]["status"] == "failed")
+        self.assertIn("30 minutes", recip[0]["error"])
+
+    def test_unexpected_error_fails_the_workflow(self):
+        from app import worker
+
+        job = db.create_job(question="q", raw_input=QUERY, source="web")
+        with mock.patch.object(worker, "_run_loop", side_effect=RuntimeError("boom")):
+            final = worker.run_job(job, backend=Fixture(primary_hits=_hits()))
+        self.assertEqual(final["status"], "failed")
+        self.assertIn("boom", db.get_job(job["id"])["error"])
 
 
 if __name__ == "__main__":

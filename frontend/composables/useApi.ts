@@ -23,7 +23,6 @@ export interface SetupStep { id: string; title: string; status: string; detail: 
 export interface SettingsResponse {
   settings: UserSettings
   muse_key_set: boolean
-  muse_key_last4: string
   presets: Record<string, { label: string; help: string; evalue_threshold: number | null }>
   standard_cutoffs: Cutoffs
   database_options: Record<string, { label: string; size: string; source: string }>
@@ -240,11 +239,11 @@ export function useApi() {
     return await $fetch<Job>(`${base}/jobs/${encodeURIComponent(id)}/align`, { ...withCreds, method: 'POST' })
   }
 
-  async function askJob(id: string, question: string): Promise<string> {
-    const res = await $fetch<{ answer: string }>(`${base}/jobs/${encodeURIComponent(id)}/ask`, {
+  // source: 'muse' = live Muse answer (numbers checked), 'stored' = code-written.
+  async function askJob(id: string, question: string): Promise<{ answer: string; source: 'muse' | 'stored' }> {
+    return await $fetch<{ answer: string; source: 'muse' | 'stored' }>(`${base}/jobs/${encodeURIComponent(id)}/ask`, {
       ...withCreds, method: 'POST', body: { question },
     })
-    return res.answer
   }
 
   async function getSettings(): Promise<SettingsResponse> {
@@ -258,11 +257,17 @@ export function useApi() {
     return res.settings
   }
 
+  // Eye button only: the caller's own saved key (never in getSettings).
+  async function revealMuseKey(): Promise<string> {
+    const res = await $fetch<{ muse_api_key: string }>(`${base}/settings/muse-key`, withCreds)
+    return res.muse_api_key
+  }
+
   async function aiSetup(database: string, message: string): Promise<AiSetupResponse> {
     return await $fetch<AiSetupResponse>(`${base}/settings/ai-setup`, {
       ...withCreds, method: 'POST', body: { database, message },
     })
   }
 
-  return { createJob, getJob, listJobs, listDatabases, getLibrary, sortLibrary, buildDatabase, buildFromTaxon, libraryQueryText, runSetup, setupStatus, cancelJob, deleteJob, askJob, alignJob, login, logout, me, setupOwner, register, changePassword, listUsers, createUser, resetUserPassword, removeUser, getSettings, saveSettings, aiSetup, base }
+  return { createJob, getJob, listJobs, listDatabases, getLibrary, sortLibrary, buildDatabase, buildFromTaxon, libraryQueryText, runSetup, setupStatus, cancelJob, deleteJob, askJob, alignJob, login, logout, me, setupOwner, register, changePassword, listUsers, createUser, resetUserPassword, removeUser, getSettings, saveSettings, revealMuseKey, aiSetup, base }
 }
