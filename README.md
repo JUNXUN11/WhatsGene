@@ -4,6 +4,10 @@
 
 ## Built at the Meta Global AI Developer Hackathon
 
+<br>https://cerebralvalley.ai/e/meta-ai-developer-hackathon/hackathon/gallery/2231 </br>
+
+<br></br>
+
 WhatsGene was built for the [Meta Global AI Developer Hackathon](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details) by Cerebral Valley, track **Build for Your World**. All the code was written during the building period 27 Oct – 4 Nov 2026. The first commit is dated 29 Oct 2026.
 
 Meta models used most:
